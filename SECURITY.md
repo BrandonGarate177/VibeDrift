@@ -18,9 +18,16 @@ When reporting, please include:
 ## Scope
 
 This repository is the VibeDrift CLI, which runs locally on a user's machine.
-Local scans and the five local MCP tools make no network calls. The optional
-cloud deep-scan service is a separate product; vulnerabilities in the hosted
-service can be reported through the same channels above.
+Your code never leaves your machine: no source code, file contents, or file
+paths are ever sent. The five local MCP tools never send your code and make no
+network calls. Regular scans do send a small anonymous usage beacon by default
+(language, file count, lines of code, scan time, CLI version, finding count, and
+score; no code, no file paths, no identifiers), and the CLI checks npm about once
+a day for updates; both are on for everyone whether signed in or not and can be
+turned off with `vibedrift telemetry disable` (or `VIBEDRIFT_TELEMETRY_DISABLED=1`),
+or skipped entirely with `--local-only`. The optional cloud deep-scan service is a
+separate product; vulnerabilities in the hosted service can be reported through the
+same channels above.
 
 ## Supported versions
 

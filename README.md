@@ -12,7 +12,7 @@
 
 Your AI coding agent doesn't remember what it built yesterday. VibeDrift scans your project for the contradictions, hidden duplicates, and security gaps that creep in when AI writes code across multiple sessions, and gives you a single score with concrete file-level evidence.
 
-VibeDrift is open source (MIT) and runs entirely on your machine. The core CLI, every local analyzer, and the MCP server need no account and send zero bytes off your machine. An optional hosted deep-scan service adds AI-powered analysis on top.
+VibeDrift is open source (MIT) and runs entirely on your machine. The core CLI, every local analyzer, and the MCP server need no account, and your code never leaves your machine. VibeDrift does send a small anonymous usage beacon after each scan (language, file count, lines of code, scan time, CLI version, finding count, and score; no code, no file paths, no identifiers), on by default for everyone whether signed in or not. Turn it off with `vibedrift telemetry disable` (or set `VIBEDRIFT_TELEMETRY_DISABLED=1`), or run `--local-only` for a fully offline scan. An optional hosted deep-scan service adds AI-powered analysis on top.
 
 > **🆕 Use VibeDrift inside your AI coding agent.** The [MCP server](#mcp-server) lets Claude Code / Cursor check drift *while it writes code*, so new code matches your repo's conventions the first time. Drift **prevention**, not just detection. Free, local, your code never leaves your machine. [Set it up ↓](#mcp-server)
 
@@ -130,7 +130,7 @@ VibeDrift ships an MCP server so an AI coding agent (Claude Code, Cursor) can co
 - `find_similar_function` — does a near-duplicate already exist? (so the agent reuses instead of re-writing)
 - `validate_change` — would a proposed function introduce drift or duplicate something?
 
-The five local tools are **free for everyone** — they run on your machine and send zero bytes, so there's no login and nothing to pay for. The tools build the repo's drift *baseline* automatically on first use, so there's no setup beyond adding the server.
+The five local tools are **free for everyone** — they run on your machine and never send your code, so there's no login and nothing to pay for. The tools build the repo's drift *baseline* automatically on first use, so there's no setup beyond adding the server.
 
 ### Deep mode — in-loop AI checks
 
@@ -197,8 +197,8 @@ See the [Action repository](https://github.com/skhan75/vibedrift-actions) for al
 
 ## Privacy & Telemetry
 
-- **Not logged in → zero network calls.** Nothing leaves your machine. No telemetry, no beacon, no tracking.
-- **Logged in → lightweight anonymous scan beacon.** Sends `language, file_count, loc, scan_time_ms, cli_version` on each scan (no code, no file paths, no PII). Helps us improve the tool. Opt out anytime: `vibedrift telemetry disable`.
+- **Your code never leaves your machine.** No source code, file contents, or file paths are ever sent.
+- **Anonymous scan beacon, on by default for everyone.** After each scan VibeDrift sends a small anonymous beacon whether you are signed in or not. The payload is exactly: `language, file_count, loc, scan_time_ms, cli_version, is_deep, has_git, has_intent_hints, finding_count, score` (no code, no file paths, no identifiers, no account). It helps us improve the tool. Turn it off anytime with `vibedrift telemetry disable` (or set `VIBEDRIFT_TELEMETRY_DISABLED=1`), or run `--local-only` for a fully offline scan.
 - **Update check (v0.6.1+)** — once every 24 hours, scans query the public npm registry to see whether a newer `@vibedrift/cli` is available. Cached locally. Fails silently on network errors. Respects `--local-only` and `vibedrift telemetry disable` — both skip the check entirely.
 - **`--local-only`** — skip ALL network calls even when logged in. No scan log, no beacon, no update check, no deep analysis. Use this in air-gapped environments or on sensitive codebases.
 - **`--deep`** sends function snippets (not full files) to the hosted service, processed in memory and not stored.
@@ -269,6 +269,7 @@ Supported categories: architectural, naming, async, export, import, return-shape
 | `VIBEDRIFT_API_URL` | Override API base URL (staging / self-hosted) |
 | `VIBEDRIFT_NO_BROWSER` | Set to `1` to never auto-open the browser |
 | `VIBEDRIFT_DISABLE_CACHE` | Set to `1` to disable the findings cache |
+| `VIBEDRIFT_TELEMETRY_DISABLED` | Set to `1` to turn off the anonymous scan beacon and update check (same effect as `vibedrift telemetry disable`) |
 
 ### Output Formats
 

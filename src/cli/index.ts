@@ -348,10 +348,12 @@ Environment:
   VIBEDRIFT_NO_BROWSER if "1", never auto-open the browser
 
 Telemetry:
-  When logged in, VibeDrift sends anonymous scan statistics (language,
-  file count, scan time — no code, no file paths) to improve the tool.
-  Not-logged-in scans make zero network calls. Opt out anytime:
-  $ vibedrift telemetry disable
+  Your code never leaves your machine. After each scan VibeDrift sends a
+  small anonymous usage beacon (language, file count, lines of code, scan
+  time, CLI version, finding count, and score; no code, no file paths, no
+  identifiers), on by default for everyone whether signed in or not. Turn
+  it off anytime, or run --local-only for a fully offline scan:
+  $ vibedrift telemetry disable   (or set VIBEDRIFT_TELEMETRY_DISABLED=1)
 
 Learn more: https://vibedrift.ai`,
 );

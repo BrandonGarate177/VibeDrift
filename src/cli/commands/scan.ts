@@ -865,7 +865,7 @@ export async function runScan(
       const { sendScanBeacon, buildScanBeaconPayload } = await import("../../telemetry/beacon.js");
       const { getVersion } = await import("../../core/version.js");
       void sendScanBeacon(
-        buildScanBeaconPayload(result, { cliVersion: getVersion(), isDeep: !!options.deep }),
+        buildScanBeaconPayload(result, { cliVersion: getVersion(), isDeep: !!options.deep, authed: !!bearerToken }),
         apiUrl,
       );
     } catch { /* never block the scan */ }

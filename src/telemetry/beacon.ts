@@ -1,14 +1,16 @@
 /**
  * Lightweight anonymous scan beacon.
  *
- * Fires a single POST on every scan with minimal, non-identifying metadata.
- * No code, no file paths, no PII. Opt-out via `vibedrift telemetry disable`.
+ * Fires a single POST on every scan (signed in or out) with minimal,
+ * non-identifying metadata. No code, no file paths, no PII, no user_id.
+ * Opt out via `vibedrift telemetry disable`, the VIBEDRIFT_TELEMETRY_DISABLED
+ * env var, or `--local-only`.
  *
- * Payload: { language, file_count, loc, scan_time_ms, cli_version,
- *            is_deep, has_git, has_intent_hints, finding_count, score }
+ * Payload: { language, file_count, loc, scan_time_ms, cli_version, is_deep,
+ *            has_git, has_intent_hints, finding_count, score, authed }
  *
- * The beacon is best-effort — failures are silently ignored. It should
- * never delay or affect the scan result. All network calls respect the
+ * The beacon is best-effort: failures are silently ignored. It must never
+ * delay or affect the scan result. All network calls respect the
  * `--local-only` flag (skip when set).
  */
 
@@ -31,6 +33,10 @@ export interface ScanBeaconPayload {
   has_intent_hints: boolean;
   finding_count: number;
   score: number;
+  /** Whether the scan ran while signed in. A derived boolean only; it carries
+   *  no token and no identifier, so the event stays anonymous. Lets the
+   *  dashboard split signed-in from signed-out usage. */
+  authed: boolean;
 }
 
 /**
@@ -52,7 +58,7 @@ export function buildScanBeaconPayload(
     findings: unknown[];
     compositeScore: number;
   },
-  opts: { cliVersion: string; isDeep: boolean },
+  opts: { cliVersion: string; isDeep: boolean; authed: boolean },
 ): ScanBeaconPayload {
   return {
     language: result.context.dominantLanguage,
@@ -65,10 +71,15 @@ export function buildScanBeaconPayload(
     has_intent_hints: (result.context.intentHints?.length ?? 0) > 0,
     finding_count: result.findings.length,
     score: result.compositeScore,
+    authed: opts.authed,
   };
 }
 
 export async function isTelemetryEnabled(): Promise<boolean> {
+  // Env-var opt-out for CI / automation. Presence (any non-empty value) is
+  // enough, mirroring VIBEDRIFT_DISABLE_CACHE. This single gate covers both
+  // the scan beacon and the daily npm update check.
+  if (process.env.VIBEDRIFT_TELEMETRY_DISABLED) return false;
   const config = await readConfig();
   return config.telemetryEnabled !== false;
 }
@@ -79,10 +90,12 @@ export async function showFirstRunNoticeIfNeeded(): Promise<void> {
 
   process.stderr.write(
     "\n" +
-    "  \x1b[33mVibeDrift collects anonymous scan statistics\x1b[0m (language, file count,\n" +
-    "  scan time — no code, no file paths). This helps us improve the tool.\n" +
-    "  Run \x1b[1mvibedrift telemetry disable\x1b[0m to opt out.\n" +
-    "  Learn more: https://vibedrift.ai/privacy\n\n",
+    "  \x1b[33mVibeDrift sends an anonymous usage beacon after each scan\x1b[0m (language,\n" +
+    "  file count, lines of code, scan time, CLI version, score; no code, no file\n" +
+    "  paths, no identifiers). It is on by default for everyone, signed in or not,\n" +
+    "  and the CLI also checks npm once a day for updates.\n" +
+    "  Opt out with \x1b[1mvibedrift telemetry disable\x1b[0m or VIBEDRIFT_TELEMETRY_DISABLED=1,\n" +
+    "  or run \x1b[1m--local-only\x1b[0m for a fully offline scan. https://vibedrift.ai/privacy\n\n",
   );
 
   await patchConfig({ telemetryNoticeShown: true });
