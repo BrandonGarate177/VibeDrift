@@ -4,6 +4,24 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## 0.9.6 — 2026-06-17
+
+### Added
+
+- **`VIBEDRIFT_TELEMETRY_DISABLED` environment variable.** A new env-var opt-out
+  for the anonymous usage beacon and the daily npm update check, alongside
+  `vibedrift telemetry disable` and `--local-only`. Convenient for CI and
+  automation.
+
+### Changed
+
+- **Plain-language telemetry disclosure.** The README, `--help`, and docs now
+  state exactly what the anonymous usage beacon sends (language, file count,
+  lines of code, scan time, CLI version, finding count, score; no code, no file
+  paths, no identifiers) and that it is on by default for every scan, signed in
+  or not. Your code never leaves your machine, and you can opt out anytime. The
+  beacon also carries an anonymous signed-in/signed-out boolean (no identifier).
+
 ## 0.9.5 — 2026-06-14
 
 ### Added
