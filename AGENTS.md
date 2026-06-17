@@ -55,7 +55,7 @@ npx tsx src/cli/index.ts /path/to/a/project
 | --- | --- | --- |
 | **Layer 1** (static + drift) | `src/analyzers/` (12 static analyzers) + `src/drift/` (8 cross-file drift detectors) | local, free |
 | **Layer 1.7** (Code DNA) | `src/codedna/` — fingerprinting, op sequences, pattern classification, taint, deviation | local, free |
-| **Layer 2** (deep scan) | `src/deep/` + `src/ml-client/` — client that talks to the hosted cloud service; embeddings and LLM validation run server-side | cloud, metered |
+| **Layer 2** (deep scan) | `src/ml-client/` + `src/mcp/deep-client.ts` — client that talks to the hosted cloud service; embeddings and LLM validation run server-side | cloud, metered |
 
 Supporting modules: `src/scoring/` turns findings into 5 categories of 0-20 into a composite of 0-100; `src/output/` renders reports (HTML, terminal, JSON, CSV, DOCX); `src/mcp/` is the MCP server (5 local tools plus the in-editor deep-scan client); `src/cli/` holds the Commander.js commands.
 

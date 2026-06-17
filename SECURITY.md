@@ -18,16 +18,21 @@ When reporting, please include:
 ## Scope
 
 This repository is the VibeDrift CLI, which runs locally on a user's machine.
-Your code never leaves your machine: no source code, file contents, or file
-paths are ever sent. The five local MCP tools never send your code and make no
-network calls. Regular scans do send a small anonymous usage beacon by default
-(language, file count, lines of code, scan time, CLI version, finding count, and
-score; no code, no file paths, no identifiers), and the CLI checks npm about once
-a day for updates; both are on for everyone whether signed in or not and can be
-turned off with `vibedrift telemetry disable` (or `VIBEDRIFT_TELEMETRY_DISABLED=1`),
-or skipped entirely with `--local-only`. The optional cloud deep-scan service is a
-separate product; vulnerabilities in the hosted service can be reported through the
-same channels above.
+A local scan never sends your source code, file contents, or file paths; local
+analysis and the five local MCP tools make no network calls of that kind. A
+regular scan does send a small anonymous usage beacon by default (language, file
+count, lines of code, scan time, CLI version, finding count, and score; no code,
+no file paths, no identifiers), and the CLI checks npm about once a day for
+updates; both are on for everyone whether signed in or not, and can be turned off
+with `vibedrift telemetry disable` (or `VIBEDRIFT_TELEMETRY_DISABLED=1`), or
+skipped entirely with `--local-only`.
+
+When you explicitly opt in, more is sent to the optional cloud service: a deep
+scan (`--deep`, which requires sign-in) sends in-memory function snippets, not
+whole files, and saving or uploading a report includes relative file paths,
+function names, and finding metadata. None of this happens on a default local
+scan. The hosted deep-scan service is a separate product; vulnerabilities in it
+can be reported through the same channels above.
 
 ## Supported versions
 

@@ -53,7 +53,7 @@ npx tsx src/cli/index.ts /path/to/a/project
 | `src/analyzers/` | Layer 1: per-file static analyzers (naming, imports, complexity, security, etc.) |
 | `src/drift/` | Layer 1: cross-file drift detectors (architectural, naming, import, export, async, etc.) |
 | `src/codedna/` | Layer 1.7: the Code DNA engine (fingerprinting, op sequences, taint, deviation) |
-| `src/deep/`, `src/ml-client/` | Layer 2 client: talks to the cloud deep-scan service |
+| `src/ml-client/`, `src/mcp/deep-client.ts` | Layer 2 client: talks to the cloud deep-scan service |
 | `src/mcp/` | MCP server: the five local tools plus the in-editor deep-scan client |
 | `src/scoring/` | findings into 5 categories of 0-20 into a composite of 0-100 |
 | `src/output/` | report renderers (HTML, terminal, JSON, CSV, DOCX) |
@@ -61,6 +61,17 @@ npx tsx src/cli/index.ts /path/to/a/project
 | `eval/` | the evaluation harness used to measure VibeDrift's own efficacy |
 | `test/` | vitest unit, integration, and calibration suites |
 | `docs/algorithms.md` | how the scoring and detectors work |
+
+### Where to contribute
+
+Community contributions land in the local layers: analyzers, drift detectors, the
+Code DNA engine, the MCP tools, scoring, output renderers, and docs. The Layer 2
+deep-scan client (`src/ml-client/`, `src/mcp/deep-client.ts`) talks to a hosted
+service you cannot run locally, so PRs touching it should be limited to
+client-side request and response shape and serialization, and are validated by
+maintainers against the live service. The `eval/` harness needs your own
+`ANTHROPIC_API_KEY`, is manual and metered, and is not run by `npm test` (the
+offline test suite mocks the eval runner).
 
 ## Adding an analyzer or a drift detector
 
