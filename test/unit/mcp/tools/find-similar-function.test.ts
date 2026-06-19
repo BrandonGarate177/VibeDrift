@@ -96,6 +96,12 @@ describe("find_similar_function (integration)", () => {
     expect(out.deep?.duplicates).toHaveLength(1);
     expect(out.found).toBe(true);
     expect(out.status).toBe("partial");
+    // candidate-feeding: the query is sent WITH the repo's functions (not alone),
+    // and its id is passed so the server's pairwise pairs can be filtered to it.
+    const [sentFns, , sentQueryId] = (deepAnalyze as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(sentFns.length).toBeGreaterThan(1);
+    expect(sentFns[0].id).toBe("query::totallyUnrelated");
+    expect(sentQueryId).toBe("query::totallyUnrelated");
   });
 
   it("deep:true degrades on rate_limit without throwing", async () => {

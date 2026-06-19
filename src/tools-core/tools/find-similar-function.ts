@@ -9,6 +9,7 @@ import { getBaseline } from "../../mcp/baseline-provider.js";
 import { findSimilarToBody, type SimMatch } from "../../codedna/find-similar-to-body.js";
 import { noBaselineData, type Status } from "../result.js";
 import { deepAnalyze, bodyToPayloads, inferLanguage, degradeMessage, type DeepResult } from "../../mcp/deep-client.js";
+import { buildCandidatePayloads } from "../../mcp/candidate-feeder.js";
 
 const SIMILARITY_THRESHOLD = 0.6;
 const MAX_MATCHES = 20;
@@ -62,7 +63,12 @@ export async function run({
   if (!deep) return out;
 
   // Opt-in deep pass — semantic duplicates the local token-LCS index can't see.
-  const deepRes = await deepAnalyze(bodyToPayloads(body, DEEP_QUERY_FILE), inferLanguage(DEEP_QUERY_FILE));
+  // Feed the query alongside a sample of the repo's functions so the server's
+  // pairwise detector has something to compare against (without candidates it is
+  // repo-blind and returns nothing).
+  const queryPayload = bodyToPayloads(body, DEEP_QUERY_FILE)[0];
+  const payloads = await buildCandidatePayloads(rootDir, queryPayload);
+  const deepRes = await deepAnalyze(payloads, inferLanguage(DEEP_QUERY_FILE), queryPayload.id);
   out.deep = deepRes;
   if (deepRes.degraded) {
     out.status = "degraded";

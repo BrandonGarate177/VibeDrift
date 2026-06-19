@@ -241,6 +241,13 @@ describe("validate_change (integration)", () => {
     expect(out.deep?.intentMismatches).toHaveLength(1);
     expect(out.ok).toBe(false);
     expect(out.status).toBe("partial");
+    // candidate-feeding: query (file = relTarget) goes first, repo candidates
+    // follow, and the function under edit's own file is excluded from candidates.
+    const [sentFns, , sentQueryId] = (deepAnalyze as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(sentFns.length).toBeGreaterThan(1);
+    expect(sentFns[0].file).toBe("feature.ts");
+    expect(sentFns.slice(1).every((f: { file: string }) => f.file !== "feature.ts")).toBe(true);
+    expect(sentQueryId).toBe(sentFns[0].id);
   });
 
   it("deep:true degrades gracefully (status=degraded) without throwing on quota", async () => {

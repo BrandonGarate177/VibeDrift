@@ -21,6 +21,7 @@ import { classifyDataAccessLabel, DATA_ACCESS_NAMES } from "../../drift/architec
 import { findSimilarToBody, type SimMatch } from "../../codedna/find-similar-to-body.js";
 import { noBaselineData, type Status } from "../result.js";
 import { deepAnalyze, bodyToPayloads, inferLanguage, degradeMessage, type DeepResult } from "../../mcp/deep-client.js";
+import { buildCandidatePayloads } from "../../mcp/candidate-feeder.js";
 
 const DUPLICATE_THRESHOLD = 0.8; // a CHANGE introducing a near-clone — stricter than discovery
 const MAX_MATCHES = 20;
@@ -241,7 +242,13 @@ export async function run({
   // Opt-in deep pass. The local tool is free for everyone; the deep check is
   // metered — the API re-checks entitlement + billing server-side and the
   // client degrades gracefully (never throws) when the budget is empty.
-  const deepRes = await deepAnalyze(bodyToPayloads(body, relTarget), inferLanguage(relTarget));
+  // Feed the proposed function alongside a sample of the repo's functions so the
+  // server's pairwise duplicate detector can surface a cross-repo semantic clone.
+  // buildCandidatePayloads drops candidates in relTarget, mirroring the local
+  // self-exclusion (a function isn't a duplicate of itself).
+  const queryPayload = bodyToPayloads(body, relTarget)[0];
+  const payloads = await buildCandidatePayloads(rootDir, queryPayload);
+  const deepRes = await deepAnalyze(payloads, inferLanguage(relTarget), queryPayload.id);
   out.deep = deepRes;
   if (deepRes.degraded) {
     out.status = "degraded";
