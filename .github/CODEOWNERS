@@ -1,0 +1,6 @@
+# VibeDrift code owners.
+# Every pull request to a protected branch requires a review from a maintainer
+# listed here before it can be merged. Keep this list in sync with the people
+# who hold the admin/maintain role on the repository.
+
+*       @skhan75 @anishekkamal

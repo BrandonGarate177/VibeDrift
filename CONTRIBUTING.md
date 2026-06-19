@@ -110,6 +110,12 @@ npm run build
 - New behavior needs tests. Bug fixes should include a regression test.
 - Update `README.md` whenever you add or change a CLI flag, command, or feature.
 
+## How changes land
+
+- **Open a pull request.** Contributors work on a branch (or a fork) and open a PR against `main`. Nobody commits to `main` directly except repository admins.
+- **Every PR is reviewed.** A maintainer (a code owner, see [`.github/CODEOWNERS`](./.github/CODEOWNERS)) must approve a PR before it can be merged. Keep PRs focused and green so review is quick.
+- **Maintainers merge.** Only maintainers and admins merge PRs to `main`. Your PR landing is the maintainers' call once it meets the bar above.
+
 ## What does not belong here
 
 This is the open client. Product strategy, pricing, cloud-service code, and
