@@ -9,6 +9,8 @@ import { getBaseline } from "../../mcp/baseline-provider.js";
 import { findSimilarToBody, type SimMatch } from "../../codedna/find-similar-to-body.js";
 import { noBaselineData, type Status } from "../result.js";
 import { deepAnalyze, bodyToPayloads, inferLanguage, degradeMessage, type DeepResult } from "../../mcp/deep-client.js";
+import { buildCandidatePayloads } from "../../mcp/candidate-feeder.js";
+import { deepDuplicatesViaIndex } from "../../mcp/deep-index.js";
 
 const SIMILARITY_THRESHOLD = 0.6;
 const MAX_MATCHES = 20;
@@ -62,7 +64,15 @@ export async function run({
   if (!deep) return out;
 
   // Opt-in deep pass — semantic duplicates the local token-LCS index can't see.
-  const deepRes = await deepAnalyze(bodyToPayloads(body, DEEP_QUERY_FILE), inferLanguage(DEEP_QUERY_FILE));
+  // Fast path: embed just this function and cosine it against the cached per-repo
+  // embedding index. Cold-start fallback: feed the query + a sample of the repo's
+  // functions to /v1/analyze (the index is built lazily, so this is rare).
+  const queryPayload = bodyToPayloads(body, DEEP_QUERY_FILE)[0];
+  let deepRes = await deepDuplicatesViaIndex(rootDir, queryPayload, baseline.key);
+  if (deepRes === null) {
+    const payloads = await buildCandidatePayloads(rootDir, queryPayload);
+    deepRes = await deepAnalyze(payloads, inferLanguage(DEEP_QUERY_FILE), queryPayload.id);
+  }
   out.deep = deepRes;
   if (deepRes.degraded) {
     out.status = "degraded";

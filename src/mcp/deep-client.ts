@@ -34,6 +34,7 @@ export interface DeepResult {
 export async function deepAnalyze(
   functions: MlFunctionPayload[],
   language: string,
+  queryId?: string,
 ): Promise<DeepResult> {
   const empty = { intentMismatches: [], duplicates: [] };
 
@@ -53,27 +54,42 @@ export async function deepAnalyze(
 
   try {
     const resp = await callMlApi(request, tok.token, apiUrl);
+    // When candidates are fed alongside the query (queryId set), the server
+    // returns query-vs-candidate AND candidate-vs-candidate pairs intermixed.
+    // Keep only the ones that involve the query — the function the agent is
+    // actually judging — and drop the candidate-vs-candidate noise.
+    const dupes = (resp.duplicates ?? []).filter(
+      (d) => !queryId || d.function_a === queryId || d.function_b === queryId,
+    );
+    const intents = (resp.intent_mismatches ?? []).filter(
+      (m) => !queryId || m.function_id === queryId,
+    );
     return {
       degraded: false,
-      intentMismatches: (resp.intent_mismatches ?? []).map((m) => ({
+      intentMismatches: intents.map((m) => ({
         kind: "intent" as const,
         detail: m.name,
         confidence: m.confidence,
         verdict: m.llm_verdict,
       })),
-      duplicates: (resp.duplicates ?? []).map((d) => ({
-        kind: "duplicate" as const,
-        detail: `${d.function_a} ≈ ${d.function_b}`,
-        confidence: d.confidence,
-        verdict: d.llm_verdict ?? d.verdict,
-      })),
+      duplicates: dupes.map((d) => {
+        const other = d.function_a === queryId ? d.function_b : d.function_a;
+        return {
+          kind: "duplicate" as const,
+          detail: queryId ? `${queryId} ≈ ${other}` : `${d.function_a} ≈ ${d.function_b}`,
+          confidence: d.confidence,
+          verdict: d.llm_verdict ?? d.verdict,
+        };
+      }),
     };
   } catch (e) {
-    return { degraded: true, reason: classify(e), ...empty };
+    return { degraded: true, reason: classifyDegradeReason(e), ...empty };
   }
 }
 
-function classify(e: unknown): DegradeReason {
+/** Map a thrown API error to a DegradeReason (402→quota, 429→rate_limited,
+ *  abort/timeout→timeout, else network). Shared with the local-index path. */
+export function classifyDegradeReason(e: unknown): DegradeReason {
   const msg = String((e as Error)?.message ?? e).toLowerCase();
   if (msg.includes("402")) return "quota";
   if (msg.includes("429")) return "rate_limited";

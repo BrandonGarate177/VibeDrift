@@ -81,4 +81,27 @@ describe("deepAnalyze", () => {
     expect(r.degraded).toBe(true);
     expect(r.reason).toBe("rate_limited");
   });
+
+  it("filters duplicates + intent to the query when queryId is set", async () => {
+    (resolveToken as ReturnType<typeof vi.fn>).mockResolvedValue({ token: "t", source: "config" });
+    (callMlApi as ReturnType<typeof vi.fn>).mockResolvedValue({
+      processing_time_ms: 5,
+      intent_mismatches: [
+        { function_id: "query::q", name: "q", similarity: 0.2, confidence: 0.9, needs_llm: false },
+        { function_id: "other.ts::z", name: "z", similarity: 0.2, confidence: 0.9, needs_llm: false },
+      ],
+      duplicates: [
+        { function_a: "query::q", function_b: "a.ts::twin", similarity: 0.88, confidence: 0.88, verdict: "semantic_duplicate", needs_llm: false },
+        { function_a: "a.ts::twin", function_b: "b.ts::other", similarity: 0.9, confidence: 0.9, verdict: "semantic_duplicate", needs_llm: false },
+      ],
+      anomalies: [], deviations: [], llm_validations: [],
+    });
+    const r = await deepAnalyze([FN], "typescript", "query::q");
+    // candidate-vs-candidate pair dropped; only the query-involving pair survives
+    expect(r.duplicates).toHaveLength(1);
+    expect(r.duplicates[0].detail).toBe("query::q ≈ a.ts::twin");
+    // intent filtered to the query function only
+    expect(r.intentMismatches).toHaveLength(1);
+    expect(r.intentMismatches[0].detail).toBe("q");
+  });
 });
