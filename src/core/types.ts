@@ -164,6 +164,22 @@ export interface ScanResult {
   compositeScore: number;
   maxCompositeScore: number;
   /**
+   * Peer percentile rank (0–100) of `compositeScore` against a bundled
+   * corpus of real-world repos in the same language. Higher = lower drift
+   * than a larger share of peers. `null` when the corpus has no data for
+   * this repo's language (the placeholder/empty-artifact case), or when the
+   * language can't be determined. The percentile itself is a pure, local,
+   * free computation; only the RENDER of it is Pro-gated (see
+   * `isPeerGroundedEntitled`). Computed by `compositeToPercentile`.
+   */
+  percentile?: number | null;
+  /**
+   * The language used for the peer-percentile lookup (the repo's dominant
+   * language). Undefined when there is no dominant language. Surfaced so the
+   * renderer can name the cohort ("comparable <language> repos").
+   */
+  peerLanguage?: string;
+  /**
    * Parallel per-category scores for hygiene-kind findings. Same shape
    * and formula as `scores`, but fed exclusively by findings whose
    * analyzer is tagged `kind: "hygiene"`. Rendered in a separate pane.
@@ -221,6 +237,43 @@ export interface PerFileScore {
   findings: Finding[];
   score: number;
   maxScore: number;
+}
+
+/**
+ * Per-language distribution of composite Vibe Drift Scores across a bundled
+ * corpus of real-world repos. The CLI does a pure, local ECDF lookup against
+ * the per-language `scores` array to place a repo's composite on a peer
+ * percentile. FROZEN SCHEMA — the (future) corpus producer must emit exactly
+ * this shape so the two stay in lockstep. The shipped artifact is a
+ * placeholder with `languages: {}` until the corpus build lands; the lookup
+ * returns `null` for any language not present, and the renderer shows nothing.
+ */
+export interface ScorePercentiles {
+  /** Corpus snapshot identifier (bumped when the corpus is rebuilt). */
+  corpus_version: string;
+  /** SCORING_VERSION the corpus scores were computed under. */
+  scoring_version: string;
+  /** Cohort sizes used to build the distribution. */
+  generated: { elite_n: number; negative_n: number };
+  /** Per-language lookup cohorts, keyed by SupportedLanguage. */
+  languages: Record<string, ScorePercentilesLanguage>;
+}
+
+/** One language's lookup cohort within {@link ScorePercentiles}. */
+export interface ScorePercentilesLanguage {
+  /** Total repos in the lookup cohort (length of `scores`). */
+  n: number;
+  /** ALL repos (elite + negative), composite scores sorted ascending — the CLI ECDF lookup array. */
+  scores: number[];
+  /** Pre-computed percentile cut points (informational; not used by the CLI lookup). */
+  percentiles: { p10: number; p25: number; p50: number; p75: number; p90: number };
+  /** Per-stratum summaries (informational). */
+  strata: Record<string, { n: number; p50: number }>;
+  /** Train/heldout split reserved for a later discrimination test (not used by the CLI lookup). */
+  folds: {
+    train: { n: number; scores: number[] };
+    heldout: { n: number; scores: number[] };
+  };
 }
 
 export interface CategoryScores {

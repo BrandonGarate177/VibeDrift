@@ -11,3 +11,14 @@ export type Plan = "free" | "pro" | "enterprise";
 export function isPaidPlan(plan?: Plan | null): boolean {
   return plan === "pro" || plan === "enterprise";
 }
+
+/**
+ * Single source of truth for the peer-grounded (corpus percentile) capability;
+ * consumed by BOTH the CLI render path and the MCP tools so they never diverge
+ * (plan §1.5). The percentile itself is a pure, local, free computation — only
+ * surfacing it is paid. Mirrors `isPaidPlan` so the gate can never drift from
+ * the canonical paid-plan definition.
+ */
+export function isPeerGroundedEntitled(plan?: Plan | string | null): boolean {
+  return isPaidPlan(plan as Plan | null | undefined);
+}

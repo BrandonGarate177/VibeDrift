@@ -372,6 +372,8 @@ async function buildScanResult(
     hygieneScore,
     maxHygieneScore,
     perFileScores,
+    percentile,
+    peerLanguage,
     scoringVersion,
     previousScoresMismatch,
   } = computeScores(
@@ -434,6 +436,8 @@ async function buildScanResult(
     scores,
     compositeScore,
     maxCompositeScore,
+    percentile,
+    peerLanguage,
     hygieneScores,
     hygieneScore,
     maxHygieneScore,
@@ -509,6 +513,7 @@ async function logAndRender(
   rootDir: string,
   codeDnaResult: any,
   paid: boolean,
+  plan?: import("../../auth/plan.js").Plan,
 ): Promise<void> {
   const { findings: allFindings, compositeScore, maxCompositeScore, scanTimeMs } = result;
 
@@ -630,7 +635,9 @@ async function logAndRender(
   const format = options.format ?? (options.json ? "json" : "html");
 
   if (!bearerToken && format !== "json" && format !== "terminal") {
-    // Unauthenticated: show score + Fix Plan + personalized CTA
+    // Unauthenticated: show score + Fix Plan + personalized CTA.
+    // No plan passed → free-gated peer percentile (locked teaser when corpus
+    // data exists; nothing in the current placeholder case).
     console.log(renderTerminalOutput(result, { brief: true }));
     console.log("");
     console.log(chalk.dim("  ─────────────────────────────────────────────────────────────"));
@@ -640,7 +647,7 @@ async function logAndRender(
     for (const line of renderStarCta()) console.log(line);
     console.log("");
   } else {
-    await renderToFormat(result, format, options, paid);
+    await renderToFormat(result, format, options, paid, plan);
   }
 
   // Fail on score threshold
@@ -654,6 +661,7 @@ async function renderToFormat(
   format: string,
   options: ScanOptions,
   paid: boolean,
+  plan?: import("../../auth/plan.js").Plan,
 ): Promise<void> {
   if (format === "html") {
     const scanId = (result as any).__scanId as string | undefined;
@@ -708,7 +716,7 @@ async function renderToFormat(
       console.log(json);
     }
   } else {
-    console.log(renderTerminalOutput(result));
+    console.log(renderTerminalOutput(result, { plan }));
   }
 }
 
@@ -879,10 +887,12 @@ export async function runScan(
   // the authoritative server backstop. Defaults to free-gating on any error, and
   // works offline / --local-only (cached plan, no network call).
   let paid = false;
+  let plan: import("../../auth/plan.js").Plan | undefined;
   try {
     const { readConfig } = await import("../../auth/config.js");
     const { isPaidPlan } = await import("../../auth/plan.js");
-    paid = isPaidPlan((await readConfig()).plan);
+    plan = (await readConfig()).plan as import("../../auth/plan.js").Plan | undefined;
+    paid = isPaidPlan(plan);
   } catch { /* default: free-gated */ }
 
   // Rich fix-prompt prose synthesis. PAID-ONLY; runs when logged in AND network is on.
@@ -977,5 +987,5 @@ export async function runScan(
 
   await writeContextIfRequested(result, options, rootDir, paid);
 
-  await logAndRender(result, options, bearerToken, apiUrl, rootDir, pipeline.codeDnaResult, paid);
+  await logAndRender(result, options, bearerToken, apiUrl, rootDir, pipeline.codeDnaResult, paid, plan);
 }

@@ -5,7 +5,12 @@ import type {
   SupportedLanguage,
   PerFileScore,
   AnalysisContext,
+  ScorePercentiles,
 } from "../core/types.js";
+// Bundled corpus distribution. Imported (not fs-read) so tsup/esbuild inlines
+// it into the build. PLACEHOLDER until the corpus build lands: `languages` is
+// empty, so `compositeToPercentile` returns null and the renderer shows nothing.
+import scorePercentilesArtifact from "../data/score_percentiles.json" with { type: "json" };
 import {
   CATEGORY_CONFIG,
   ALL_CATEGORIES,
@@ -35,6 +40,57 @@ import {
  * src/core/scoring-notice.ts). Users never see this string.
  */
 export const SCORING_VERSION = "v4";
+
+/** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
+export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
+
+/**
+ * Place a composite Vibe Drift Score on a peer percentile against a bundled
+ * corpus of real-world repos in the same language. Pure, local, deterministic,
+ * and FREE — only surfacing the result is Pro-gated (see `isPeerGroundedEntitled`).
+ *
+ * The percentile is the empirical CDF of the language's `scores` array:
+ *   percentile = (count of corpus scores <= compositeScore) / n * 100
+ * found via binary search (scores are sorted ascending). Higher composite ⇒
+ * higher percentile ("lower drift than X% of comparable repos"). Rounded to one
+ * decimal.
+ *
+ * Returns `null` when the corpus has no usable data for the language — i.e. the
+ * distribution is undefined, the language is absent, or its cohort is empty.
+ * This is the placeholder case: with the shipped empty artifact, every lookup
+ * returns `null` and the renderer shows nothing.
+ *
+ * @param compositeScore the repo's composite Vibe Drift Score (0–100)
+ * @param language       the repo's dominant language (corpus cohort key)
+ * @param dist           the corpus distribution (defaults to the bundled artifact)
+ */
+export function compositeToPercentile(
+  compositeScore: number,
+  language: string,
+  dist: ScorePercentiles | undefined = scorePercentiles,
+): number | null {
+  if (!dist) return null;
+  const cohort = dist.languages?.[language];
+  if (!cohort || cohort.n <= 0) return null;
+  const scores = cohort.scores;
+  if (!scores || scores.length === 0) return null;
+
+  // Binary search for the count of scores <= compositeScore (upper bound).
+  // `scores` is sorted ascending; `lo` ends as the count of values <= target.
+  let lo = 0;
+  let hi = scores.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (scores[mid] <= compositeScore) lo = mid + 1;
+    else hi = mid;
+  }
+  const countAtOrBelow = lo;
+
+  const pct = (countAtOrBelow / cohort.n) * 100;
+  // Clamp defensively (n should equal scores.length, but never report >100).
+  const clamped = Math.max(0, Math.min(100, pct));
+  return Math.round(clamped * 10) / 10;
+}
 
 /**
  * Decompressed scoring (v4) constants — detector-level damage model.
@@ -405,6 +461,15 @@ export function computeScores(
   hygieneScore: number;
   maxHygieneScore: number;
   perFileScores: Map<string, PerFileScore>;
+  /**
+   * Peer percentile of `compositeScore` against the bundled corpus for the
+   * repo's dominant language. `null` when there is no dominant language or no
+   * corpus data for it (the current placeholder-artifact case). Pure/local/free;
+   * the Pro gate is applied at render time, not here.
+   */
+  percentile: number | null;
+  /** Dominant language used for the percentile lookup, if any. */
+  peerLanguage?: string;
   /** Stable identifier of the scoring math used to produce this result. */
   scoringVersion: string;
   /**
@@ -453,6 +518,14 @@ export function computeScores(
 
   const perFileScores = computePerFileScores(findings, ctx);
 
+  // Peer percentile — pure/local/free ECDF lookup against the bundled corpus.
+  // Keyed on the repo's dominant language; null when there's no dominant
+  // language or no corpus cohort for it (the current placeholder artifact).
+  const peerLanguage = ctx?.dominantLanguage ?? undefined;
+  const percentile = peerLanguage
+    ? compositeToPercentile(drift.compositeScore, peerLanguage)
+    : null;
+
   return {
     scores: drift.scores,
     compositeScore: drift.compositeScore,
@@ -461,6 +534,8 @@ export function computeScores(
     hygieneScore: hygiene.compositeScore,
     maxHygieneScore: hygiene.maxCompositeScore,
     perFileScores,
+    percentile,
+    peerLanguage,
     scoringVersion: SCORING_VERSION,
     previousScoresMismatch,
   };

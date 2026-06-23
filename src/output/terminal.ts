@@ -10,6 +10,8 @@ import chalk from "chalk";
 import type { ScanResult, Finding } from "../core/types.js";
 import { CATEGORY_CONFIG, ALL_CATEGORIES, getAnalyzerKind } from "../scoring/categories.js";
 import { scoreBar, padRight, formatCount } from "./format.js";
+import { scorePercentiles } from "../scoring/engine.js";
+import { isPeerGroundedEntitled, type Plan } from "../auth/plan.js";
 
 /**
  * Public GitHub repo for the post-scan "star us" CTA. Empty string keeps the
@@ -500,6 +502,45 @@ function renderCategoryBars(result: ScanResult): string[] {
   return lines;
 }
 
+/**
+ * Peer-percentile line — places the composite against a bundled corpus of
+ * real-world repos in the same language. The percentile itself is a free,
+ * local computation (already on `result.percentile`); the GATE on whether to
+ * surface it is the shared `isPeerGroundedEntitled` predicate, the same one the
+ * MCP tools consume, so CLI and MCP can never diverge on free-vs-paid.
+ *
+ * Render matrix:
+ *   - No corpus data for the language (percentile === null): render NOTHING for
+ *     everyone — including Free. We deliberately suppress the Free teaser too,
+ *     so we never advertise a capability that would currently return nothing
+ *     (the placeholder-artifact case until the corpus build lands).
+ *   - Pro/entitled + data present: the real percentile line.
+ *   - Free + data present: a single locked teaser line.
+ */
+function renderPeerPercentile(result: ScanResult, plan?: Plan): string[] {
+  const pct = result.percentile;
+  // No corpus data for this language → suppress for everyone (no empty tease).
+  if (pct == null) return [];
+
+  if (isPeerGroundedEntitled(plan)) {
+    const lang = result.peerLanguage ?? "comparable";
+    const cohort = result.peerLanguage ? scorePercentiles.languages[result.peerLanguage] : undefined;
+    const n = cohort?.n ?? 0;
+    const pctStr = Number.isInteger(pct) ? pct.toFixed(0) : pct.toFixed(1);
+    const vs = n > 0 ? ` (vs ${formatCount(n)} real-world repos)` : "";
+    return [
+      `  ${chalk.bold("Peer percentile:")} ${chalk.cyan(`lower drift than ${pctStr}% of comparable ${lang} repos`)}${chalk.dim(vs)}`,
+      "",
+    ];
+  }
+
+  // Free + data present → one locked teaser line.
+  return [
+    chalk.dim(`  🔒 Peer percentile (Pro): see how your drift compares to real-world repos — upgrade at vibedrift.ai`),
+    "",
+  ];
+}
+
 function renderScoreSection(result: ScanResult): string[] {
   const lines: string[] = [];
 
@@ -582,15 +623,16 @@ function renderCoherenceReport(result: ScanResult): string[] {
   return lines;
 }
 
-export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolean }): string {
+export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolean; plan?: Plan }): string {
   if (opts?.brief) {
-    return renderBriefOutput(result);
+    return renderBriefOutput(result, opts.plan);
   }
 
   const lines: string[] = [
     ...renderScoreSection(result),
     ...renderDiffBanner(result),
     ...renderCategoryBars(result),
+    ...renderPeerPercentile(result, opts?.plan),
     ...renderFixPlan(result),
     ...renderFindingsList(result),
     ...renderHygienePane(result),
@@ -648,10 +690,11 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
  * Shows: score, category bars, top 5 findings — enough to prove value,
  * not enough to replace the full report.
  */
-function renderBriefOutput(result: ScanResult): string {
+function renderBriefOutput(result: ScanResult, plan?: Plan): string {
   const lines: string[] = [
     ...renderScoreSection(result),
     ...renderCategoryBars(result),
+    ...renderPeerPercentile(result, plan),
     ...renderFixPlan(result, true),  // drift-first mix for conversion
   ];
 
@@ -678,6 +721,10 @@ export function renderJsonOutput(result: ScanResult): string {
       scores: result.scores,
       compositeScore: result.compositeScore,
       maxCompositeScore: result.maxCompositeScore,
+      // Peer percentile against the bundled corpus (null when no corpus data
+      // for the language — the current placeholder case). Free/local computation.
+      percentile: result.percentile ?? null,
+      peerLanguage: result.peerLanguage,
       hygieneScores: result.hygieneScores,
       hygieneScore: result.hygieneScore,
       maxHygieneScore: result.maxHygieneScore,
