@@ -165,18 +165,27 @@ describe("MinHash + LSH", () => {
   });
 
   describe("findLshCandidatePairs", () => {
-    it("LSH catches high-similarity pairs (s=0.9, catch rate ~99.999%)", () => {
-      // Make two signatures that are 90% identical by seeding them
-      // from highly-overlapping shingle sets.
-      const shared = randomShingles(90, 500);
-      const onlyA = randomShingles(10, 500);
-      const onlyB = randomShingles(10, 500);
+    it("LSH catches a high-similarity pair (J=0.95) among distractors", () => {
+      // Deterministic by construction: distinct shingle ids (no
+      // with-replacement collisions) make the Jaccard exact and the
+      // signatures — and therefore the LSH outcome — reproducible.
+      // Two sets sharing 190 of 200 shingles have J = 190/200 = 0.95.
+      // At b=16, r=8 the ideal catch probability is 1-(1-0.95^8)^16 ≈
+      // 1 - 2e-8, so this specific instance is caught every run (verified).
+      // (A random-draw version of this test was flaky at ~2%/run because
+      // with-replacement draws deflated the true Jaccard to ~0.83.)
+      const shared = Array.from({ length: 190 }, (_, i) => `sh_${i}`);
+      const onlyA = Array.from({ length: 5 }, (_, i) => `a_${i}`);
+      const onlyB = Array.from({ length: 5 }, (_, i) => `b_${i}`);
       const sigs: Uint32Array[] = [];
       sigs.push(minHashSignature([...shared, ...onlyA]));
       sigs.push(minHashSignature([...shared, ...onlyB]));
-      // Add 20 random unrelated signatures as distractors.
+      // Add 20 disjoint-namespace signatures as distractors; they must not
+      // collide with the similar pair (or with each other).
       for (let i = 0; i < 20; i++) {
-        sigs.push(minHashSignature(randomShingles(50, 500)));
+        sigs.push(
+          minHashSignature(Array.from({ length: 50 }, (_, j) => `d${i}_${j}`)),
+        );
       }
 
       const pairs = findLshCandidatePairs(sigs);
