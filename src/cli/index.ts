@@ -7,8 +7,11 @@
  * self-update, diagnostics, and user feedback.
  */
 
+import { resolve } from "path";
 import { Command, Option } from "commander";
 import { runScan } from "./commands/scan.js";
+import { runInit } from "./commands/init.js";
+import { runIgnore } from "./commands/ignore.js";
 import { runUpdate } from "./commands/update.js";
 import { runLogin } from "./commands/login.js";
 import { runLogout } from "./commands/logout.js";
@@ -135,7 +138,7 @@ program
     new Option("--api-url <url>", "override the VibeDrift API base URL")
       .hideHelp(),
   )
-  .action(async (path: string, options) => {
+  .action(async (path: string, options, command) => {
     if (options.update) {
       await runUpdate(VERSION);
       return;
@@ -153,11 +156,25 @@ program
       return;
     }
 
+    // Project config (.vibedrift/config.json) supplies defaults for `format`
+    // and `failOnScore`; an explicit CLI flag always wins. getOptionValueSource
+    // distinguishes a real `--format` from the option's built-in default.
+    const { loadProjectConfig } = await import("../core/project-config.js");
+    const projectConfig = await loadProjectConfig(resolve(path));
+    const formatFromCli = command.getOptionValueSource("format") === "cli";
+    const resolvedFormat = options.json
+      ? "json"
+      : formatFromCli
+        ? options.format
+        : (projectConfig?.format ?? options.format);
+    const resolvedFailOnScore =
+      options.failOnScore ?? projectConfig?.failOnScore;
+
     await runScan(path, {
       json: options.json,
-      format: options.json ? "json" : options.format,
+      format: resolvedFormat,
       output: options.output,
-      failOnScore: options.failOnScore,
+      failOnScore: resolvedFailOnScore,
       codedna: options.codedna,
       cache: options.cache,
       deep: options.localOnly ? false : options.deep,
@@ -177,6 +194,25 @@ program
       // --diff with no value → true (uncommitted vs HEAD); --diff main → "main".
       diff: options.diff,
     });
+  });
+
+// ──── Init subcommand — guided one-time project setup ────
+program
+  .command("init")
+  .description("Set up VibeDrift for this project (.vibedriftignore + .vibedrift/config.json)")
+  .argument("[path]", "path to project directory", ".")
+  .option("-y, --yes", "accept detected defaults without prompting (non-interactive)")
+  .action(async (path: string, options) => {
+    await runInit({ rootDir: path, yes: options.yes });
+  });
+
+// ──── Ignore subcommand — quick append to .vibedriftignore ────
+program
+  .command("ignore")
+  .description("Add path glob(s) to .vibedriftignore so scans skip them")
+  .argument("<patterns...>", 'glob(s) to exclude, e.g. "**/fixtures/**"')
+  .action(async (patterns: string[]) => {
+    await runIgnore(patterns);
   });
 
 // ──── Watch subcommand — rerun scan + refresh .vibedrift/ on file changes ────
@@ -343,6 +379,8 @@ program.addHelpText(
 Examples:
   $ vibedrift                          scan the current directory
   $ vibedrift ./my-project             scan a specific project
+  $ vibedrift init                     guided setup (.vibedriftignore + config)
+  $ vibedrift ignore "**/fixtures/**"  skip a path glob in every scan
   $ vibedrift --format terminal        print results to the terminal
   $ vibedrift --json > report.json     pipe JSON output to a file
   $ vibedrift --fail-on-score 70       fail CI if score drops below 70

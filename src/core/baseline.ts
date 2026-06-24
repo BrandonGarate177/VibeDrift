@@ -15,7 +15,7 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 
 import { buildAnalysisContext } from "./discovery.js";
 import { runDriftDetection } from "../drift/index.js";
@@ -160,6 +160,18 @@ export async function writeBaseline(b: RepoDriftBaseline): Promise<void> {
     minhashIndex: b.minhashIndex.map((e) => ({ ...e, signature: Array.from(e.signature) })),
   };
   await writeFile(join(CACHE_DIR, `${projectHash(b.rootDir)}.json`), JSON.stringify(serial), "utf8");
+}
+
+/**
+ * Drop the persisted baseline for a repo so the next build re-runs discovery
+ * from scratch. Called after exclusions change (`vibedrift init` / `ignore` /
+ * the MCP init tool), because the cached baseline was keyed on the old file
+ * set and its freshness check only re-hashes files it already knows — it would
+ * keep serving now-ignored files until a full rescan otherwise. No-op if no
+ * baseline is persisted.
+ */
+export async function deletePersistedBaseline(rootDir: string): Promise<void> {
+  await rm(join(CACHE_DIR, `${projectHash(rootDir)}.json`), { force: true });
 }
 
 function hydrate(parsed: SerializedBaseline): RepoDriftBaseline {

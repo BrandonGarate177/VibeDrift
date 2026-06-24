@@ -65,6 +65,16 @@ export function __clearBaselineCache(): void {
 }
 
 /**
+ * Drop one repo's in-process baseline so the next tool call rebuilds it.
+ * Called by the MCP `init` tool after it writes exclusions, so a long-lived
+ * server honors the new `.vibedriftignore` within the same session instead of
+ * serving the pre-exclusion baseline until restart.
+ */
+export function invalidateBaselineMem(rootDir: string): void {
+  memCache.delete(rootDir);
+}
+
+/**
  * Re-hash the working tree using the same (path, content-hash) merkle the
  * baseline was keyed on, so a content change flips the result to `stale`.
  * Files that vanished hash as "MISSING" (also a change). New files that the

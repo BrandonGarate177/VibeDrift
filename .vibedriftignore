@@ -1,0 +1,15 @@
+# VibeDrift scan exclusions (gitignore syntax).
+# Paths here are skipped by `vibedrift scan` and the MCP server, so they
+# don't count toward the Vibe Drift Score. Created/edited by
+# `vibedrift init` and `vibedrift ignore`. Docs: https://vibedrift.ai/guide
+#
+# These are test INPUTS and research tooling, not the product. The npm
+# package ships only dist/ + bin/ + skills/, so none of this is installed by
+# users. eval/ holds the discrimination harness itself plus its
+# deliberately-messy negative-class fixture repos (the bulk of eval/);
+# test/fixtures and test/calibration are synthetic drift inputs that exist to
+# prove the scanner discriminates. The real test suite (test/**/*.test.ts)
+# stays in scope.
+eval/
+test/fixtures/
+test/calibration/

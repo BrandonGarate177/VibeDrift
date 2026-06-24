@@ -3,7 +3,7 @@ import { writeFile } from "fs/promises";
 import { stat } from "fs/promises";
 import chalk from "chalk";
 import ora from "ora";
-import { buildAnalysisContext } from "../../core/discovery.js";
+import { buildAnalysisContext, recomputeContextStats } from "../../core/discovery.js";
 import { parseFiles } from "../../utils/ast.js";
 import { createAnalyzerRegistry } from "../../analyzers/index.js";
 import { runDriftDetection, attachEngineComposite } from "../../drift/index.js";
@@ -25,10 +25,10 @@ import {
 import { diffScans } from "../../output/history-diff.js";
 import { isCacheDisabled, pruneCache } from "../../core/findings-cache.js";
 import { runAnalyzers } from "../../core/run-analyzers.js";
-import { applyIncludeExclude } from "../../core/file-filter.js";
+import { applyIncludeExclude, suggestExclusions } from "../../core/file-filter.js";
 import { resolveToken, resolveApiUrl } from "../../auth/resolver.js";
 import { fetchCredits } from "../../auth/api.js";
-import type { Finding, ScanResult, ScanOptions, SourceFile } from "../../core/types.js";
+import type { Finding, ScanResult, ScanOptions } from "../../core/types.js";
 
 // ────────────────────────────────────────────────────────────────────
 // 1. resolveAuthAndBanner
@@ -122,7 +122,7 @@ async function discoverAndFilterFiles(
     const before = ctx.files.length;
     const filtered = applyIncludeExclude(ctx.files, includes, excludes);
     ctx.files = filtered;
-    ctx.totalLines = filtered.reduce((sum: number, f: SourceFile) => sum + f.lineCount, 0);
+    recomputeContextStats(ctx);
     if (options.verbose) {
       console.error(chalk.dim(`[filter] ${before} → ${filtered.length} files after include/exclude`));
     }
@@ -143,7 +143,7 @@ async function discoverAndFilterFiles(
       const before = ctx.files.length;
       const changedSet = new Set(changed);
       ctx.files = ctx.files.filter((f) => changedSet.has(f.relativePath));
-      ctx.totalLines = ctx.files.reduce((sum: number, f: SourceFile) => sum + f.lineCount, 0);
+      recomputeContextStats(ctx);
       if (options.verbose) {
         console.error(chalk.dim(`[diff] ${before} → ${ctx.files.length} changed file(s)${ref ? ` vs ${ref}` : ""}`));
       }
@@ -668,6 +668,27 @@ async function renderToFormat(
   paid: boolean,
   plan?: import("../../auth/plan.js").Plan,
 ): Promise<void> {
+  // Fixture/generated-code nudge. Surfaces the exclude feature when scored
+  // files look like test inputs or generated code, so users discover it
+  // instead of silently scoring code they don't own. Auto-suppresses once a
+  // .vibedriftignore is in place (those files never reach the scanned set).
+  // Never on --format json — that stream must stay machine-parseable.
+  if (format !== "json") {
+    const suggestion = suggestExclusions([...result.perFileScores.keys()]);
+    if (suggestion.count >= 5) {
+      console.log("");
+      console.log(
+        chalk.dim(`  ℹ ${suggestion.count} scanned files look like fixtures or generated code.`),
+      );
+      console.log(
+        chalk.dim(
+          `    Skip them:  vibedrift ignore ${suggestion.globs.map((g) => `"${g}"`).join(" ")}`,
+        ),
+      );
+      console.log(chalk.dim(`    Or run  vibedrift init  for guided setup (excludes, CI floor, format).`));
+    }
+  }
+
   if (format === "html") {
     const scanId = (result as any).__scanId as string | undefined;
     const beaconApiUrl = (result as any).__apiUrl as string | undefined;
@@ -735,6 +756,8 @@ async function renderToFormat(
 // "Error: .../mcp does not exist". This list lets us catch that case and tell the
 // user the real cause (a stale CLI) instead. Keep in sync with src/cli/index.ts.
 const KNOWN_SUBCOMMANDS = new Set([
+  "init",
+  "ignore",
   "watch",
   "telemetry",
   "login",

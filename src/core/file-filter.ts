@@ -22,6 +22,64 @@ import type { SourceFile } from "./types.js";
  * Negated patterns (`!foo`) are not supported here — use --exclude instead.
  */
 
+/**
+ * Path segments that almost always denote test inputs or generated code
+ * rather than the product itself. Used only to *suggest* exclusions — we
+ * never drop these automatically, since "what counts as my code" is the
+ * user's call. Deliberately conservative: real test files (`*.test.ts`,
+ * `test/`) are NOT here, because tests are real code that drifts.
+ */
+const SUGGESTABLE_SEGMENTS = [
+  "fixtures",
+  "__fixtures__",
+  "__mocks__",
+  "mocks",
+  "snapshots",
+  "__snapshots__",
+  "generated",
+  "__generated__",
+];
+
+const GENERATED_FILE_RE = /\.(generated|gen)\.[A-Za-z0-9]+$/;
+
+export interface ExclusionSuggestion {
+  /** Number of scanned files that look like fixtures/generated code. */
+  count: number;
+  /** Suggested `.vibedriftignore` globs covering those files, sorted. */
+  globs: string[];
+}
+
+/**
+ * Inspect a set of scanned paths and suggest exclusions for files that look
+ * like fixtures or generated code. Pure and dependency-free so the scan
+ * command can surface a one-line nudge ("N files look like fixtures — exclude
+ * them") without re-walking the tree. Returns `count: 0` when nothing matches,
+ * which is how the nudge auto-suppresses once a `.vibedriftignore` is in place
+ * (those files never reach the scanned set).
+ */
+export function suggestExclusions(relativePaths: string[]): ExclusionSuggestion {
+  const globs = new Set<string>();
+  let count = 0;
+
+  for (const path of relativePaths) {
+    const segments = path.split("/");
+    let matched = false;
+    for (const seg of SUGGESTABLE_SEGMENTS) {
+      if (segments.includes(seg)) {
+        globs.add(`**/${seg}/**`);
+        matched = true;
+      }
+    }
+    if (GENERATED_FILE_RE.test(path)) {
+      globs.add("**/*.generated.*");
+      matched = true;
+    }
+    if (matched) count++;
+  }
+
+  return { count, globs: [...globs].sort() };
+}
+
 export function applyIncludeExclude(
   files: SourceFile[],
   includes: string[],

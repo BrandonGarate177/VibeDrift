@@ -264,6 +264,20 @@ function computeLanguageBreakdown(
   return { breakdown, dominant };
 }
 
+/**
+ * Recompute the size-derived fields of a context after its `files` array has
+ * been filtered (--include/--exclude, --diff). Scoring reads BOTH totalLines
+ * (evidence weighting) and languageBreakdown/dominantLanguage (peer group),
+ * so every filter site must refresh all of them — refreshing only totalLines
+ * leaves the language stats describing files that are no longer in scope.
+ */
+export function recomputeContextStats(ctx: AnalysisContext): void {
+  ctx.totalLines = ctx.files.reduce((sum, f) => sum + f.lineCount, 0);
+  const { breakdown, dominant } = computeLanguageBreakdown(ctx.files);
+  ctx.languageBreakdown = breakdown;
+  ctx.dominantLanguage = dominant;
+}
+
 export async function buildAnalysisContext(rootDir: string): Promise<{ ctx: AnalysisContext; warnings: DiscoveryWarnings }> {
   // Load file tree, manifests, git metadata, and intent hints in parallel
   // — git + intent parsing are both I/O-bound. Overlapping them with file
