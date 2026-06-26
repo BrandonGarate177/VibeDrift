@@ -32,6 +32,88 @@ export function renderStarCta(repoUrl: string = GITHUB_REPO_URL): string[] {
     chalk.dim(`  ★ Find VibeDrift useful? Star us: ${chalk.underline.cyan(repoUrl)}`),
   ];
 }
+/**
+ * Spinner copy + glyphs for the dashboard-upload step (step 2 of the
+ * authenticated flow). The `ora` lifecycle is wired by the caller; these
+ * constants keep the spinner's look matched to the rest of the CLI output.
+ *
+ *   spinner.text       → DASHBOARD_SPINNER_TEXT
+ *   spinner.succeed()  → uses DASHBOARD_SPINNER_SUCCESS_SYMBOL (green ✓)
+ *   spinner.fail()     → uses DASHBOARD_SPINNER_FAIL_SYMBOL (red ✘)
+ *
+ * Example wiring:
+ *   const s = ora({ text: DASHBOARD_SPINNER_TEXT, color: "cyan" }).start();
+ *   s.stopAndPersist({ symbol: DASHBOARD_SPINNER_SUCCESS_SYMBOL, text: "" });
+ *   console.log(renderDashboardLink(url));
+ */
+export const DASHBOARD_SPINNER_TEXT = chalk.dim("Generating your dashboard link…");
+/** Green check, matches the success glyph used elsewhere in this file. */
+export const DASHBOARD_SPINNER_SUCCESS_SYMBOL = chalk.green("✓");
+/** Red cross, matches the error glyph used elsewhere in this file. */
+export const DASHBOARD_SPINNER_FAIL_SYMBOL = chalk.red("✘");
+
+/**
+ * A compact rounded cyan box with a green ✓ heading, a dim one-liner, and an
+ * underlined-cyan clickable URL. The closing beat of a scan: it points the user
+ * at where the full report lives. Box width tracks the widest *visible* line so
+ * the right border always aligns (ANSI codes have zero print width, so we pad
+ * using the un-styled lengths). Two-space left indent throughout.
+ */
+function renderLinkBox(headingText: string, subText: string, url: string): string {
+  const headingPlain = "✓ " + headingText;
+  const subPlain = subText;
+  const urlPlain = url;
+
+  const inner = Math.max(headingPlain.length, subPlain.length, urlPlain.length);
+  const pad = (plain: string, styled: string): string =>
+    styled + " ".repeat(inner - plain.length);
+
+  const heading = chalk.green("✓") + " " + chalk.bold(headingText);
+  const sub = chalk.dim(subText);
+  const link = chalk.underline.cyan(url);
+
+  const top = chalk.cyan("╭" + "─".repeat(inner + 2) + "╮");
+  const bottom = chalk.cyan("╰" + "─".repeat(inner + 2) + "╯");
+  const row = (plain: string, styled: string): string =>
+    chalk.cyan("│") + " " + pad(plain, styled) + " " + chalk.cyan("│");
+
+  return [
+    "",
+    "  " + top,
+    "  " + row(headingPlain, heading),
+    "  " + row(subPlain, sub),
+    "  " + row(urlPlain, link),
+    "  " + bottom,
+    "",
+  ].join("\n");
+}
+
+/**
+ * Final beat of an authenticated scan: the scan is live on the web dashboard.
+ * Honest by construction — the scan IS uploaded by the time this renders, so the
+ * full report, history, and trends genuinely live at the URL.
+ */
+export function renderDashboardLink(url: string): string {
+  return renderLinkBox(
+    "Scan is live on your dashboard",
+    "View the full report, history, and trends.",
+    url,
+  );
+}
+
+/**
+ * Final beat of an unauthenticated scan: the full HTML report is being served
+ * locally and this is the localhost link to open it. Same box vocabulary as the
+ * dashboard link so the two paths feel consistent.
+ */
+export function renderLocalReportLink(url: string): string {
+  return renderLinkBox(
+    "Your full report is ready",
+    "Every finding, drift detail, and exact duplicate.",
+    url,
+  );
+}
+
 import { getLanguageDisplayName } from "../core/language.js";
 import type { SupportedLanguage } from "../core/types.js";
 import { getVersion } from "../core/version.js";
