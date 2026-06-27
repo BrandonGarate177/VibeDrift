@@ -1,11 +1,16 @@
 /*
- * SCHEMA NOTICE: The parsing logic below is based on the documented Claude Code
+ * SCHEMA NOTICE: The parsing logic below is based on the Claude Code
  * --output-format stream-json format (stream_event wrappers + raw API events).
- * This MUST be validated against REAL `claude -p --output-format stream-json --verbose`
- * output during the Phase 2 pilot before any confirmatory run. The hand-authored
- * fixtures in test/fixtures/ are SYNTHETIC and may diverge from actual claude CLI
- * output in field names, event ordering, or wrapper structure. Do NOT treat token
- * or cost figures from this parser as accurate until the schema is confirmed live.
+ *
+ * VALIDATED 2026-06-26 against a REAL `claude -p --output-format stream-json
+ * --verbose --model claude-opus-4-8` call (CLI v2.1.193): the authoritative path
+ * (last `result` event) extracted all 4 token classes, num_turns, and
+ * total_cost_usd correctly, and modelId resolved via the system/init fallback
+ * (real output carries NO message_start event — it uses system/init.model).
+ * usage × published rates reproduced result.total_cost_usd to the cent. The
+ * message_start-based fallback path and compact_boundary counting were NOT
+ * exercised live (the short call produced a result event and did not compact);
+ * both are plain type/subtype matches and remain to be confirmed on a long run.
  */
 
 import type { PerTurnUsage } from "./types.js";

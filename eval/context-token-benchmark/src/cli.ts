@@ -19,7 +19,7 @@
  *   --results <path>      JSONL output file  (default: results.jsonl)
  *   --replicates <N>      Replicate count     (default: 5)
  *   --concurrency <N>     Parallel runs       (default: 3)
- *   --model <id>          Claude model ID     (default: claude-opus-4-5)
+ *   --model <id>          Claude model ID     (default: claude-opus-4-8)
  *   --max-turns <N>       Max agent turns     (default: 30)
  *   --reruns <N>          Gate flake reruns   (default: 2)
  */
@@ -68,7 +68,7 @@ function parseArgs(argv: string[]): CliArgs {
         `  --results <path>    (default: results.jsonl)\n` +
         `  --replicates <N>    (default: 5)\n` +
         `  --concurrency <N>   (default: 3)\n` +
-        `  --model <id>        (default: claude-opus-4-5)\n` +
+        `  --model <id>        (default: claude-opus-4-8)\n` +
         `  --max-turns <N>     (default: 30)\n` +
         `  --reruns <N>        (default: 2)\n`,
     );
@@ -79,7 +79,7 @@ function parseArgs(argv: string[]): CliArgs {
   let results = "results.jsonl";
   let replicates = 5;
   let concurrency = 3;
-  let model = "claude-opus-4-5";
+  let model = "claude-opus-4-8";
   let maxTurns = 30;
   let reruns = 2;
 
@@ -193,15 +193,19 @@ async function main(): Promise<void> {
   const items = expandMatrix(repos, tasks, cliArgs.replicates);
   console.log(`[benchmark] Matrix: ${items.length} runs total`);
 
-  // ⚠ PHASE-2 SPEND GATE: these per-token USD rates are PLACEHOLDER pricing and
-  // MUST be set to the pinned model's ACTUAL published rates before any metered
-  // (pilot/confirm) run — every costUsd in the results depends on them. No CLI
-  // override exists yet; edit here at pre-registration freeze time.
+  // Per-token USD rates for the PINNED model (claude-opus-4-8). Source: Anthropic
+  // official pricing table (platform.claude.com/docs/.../pricing), fetched
+  // 2026-06-26 — $5 input / $25 output / $6.25 5m-cache-write / $0.50 cache-read
+  // per MTok. cacheWrite maps to the 5-minute ephemeral write (Claude Code's
+  // default). VALIDATED against a real `claude -p --output-format stream-json`
+  // call: usage × these rates reproduced the result event's total_cost_usd to the
+  // cent ($0.05044225). Correct ONLY for claude-opus-4-8 — if --model changes,
+  // update them (and keep inference_geo "global" / no fast-mode, or rates shift).
   const rates = {
-    input: 15 / 1_000_000,
-    output: 75 / 1_000_000,
-    cacheWrite: 18.75 / 1_000_000,
-    cacheRead: 1.875 / 1_000_000,
+    input: 5 / 1_000_000,
+    output: 25 / 1_000_000,
+    cacheWrite: 6.25 / 1_000_000,
+    cacheRead: 0.5 / 1_000_000,
   };
 
   const depsCtx = { modelId: cliArgs.model, maxTurns: cliArgs.maxTurns };
