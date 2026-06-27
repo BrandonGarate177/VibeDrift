@@ -4,6 +4,15 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Added
+
+- **`--inject-context` flag.** Inlines the context summary into `CLAUDE.md`
+  inside an idempotent managed block. Pairs with `--write-context` — run both
+  together to refresh `.vibedrift/` files and keep the CLAUDE.md block in sync
+  in a single pass.
+
 ## 0.14.6 — 2026-06-27
 
 ### Changed

@@ -442,6 +442,8 @@ export interface ScanOptions {
   cache?: boolean;
   /** Write .vibedrift/context.md + fix-plan.md + patterns.json into the project tree. */
   writeContext?: boolean;
+  /** Inject the context summary into CLAUDE.md inside an idempotent managed block. */
+  injectContext?: boolean;
   /** Skip ALL network calls — no scan log, no beacon, no deep, no fix-prompt synthesis. */
   localOnly?: boolean;
   /**

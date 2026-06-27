@@ -521,28 +521,40 @@ async function writeContextIfRequested(
   rootDir: string,
   paid: boolean,
 ): Promise<void> {
-  if (!options.writeContext) return;
-  const { writeContextFiles } = await import("../../output/context-md.js");
+  if (!options.writeContext && !options.injectContext) return;
   const { basename } = await import("path");
   const projectName = options.projectName ?? basename(rootDir);
   try {
-    const { written, note } = await writeContextFiles(rootDir, result, projectName, paid);
-    console.log("");
-    console.log(chalk.green(`  ✓ Wrote ${written.length} files to .vibedrift/`));
-    for (const f of written) {
-      console.log(chalk.dim(`    ${f}`));
-    }
-    if (note) {
+    if (options.writeContext) {
+      const { writeContextFiles } = await import("../../output/context-md.js");
+      const { written, note } = await writeContextFiles(rootDir, result, projectName, paid);
       console.log("");
-      console.log(chalk.yellow(`    ${note}`));
-    } else {
-      console.log(chalk.dim("    Commit these to share your codebase's dominant patterns with your team."));
+      console.log(chalk.green(`  ✓ Wrote ${written.length} files to .vibedrift/`));
+      for (const f of written) {
+        console.log(chalk.dim(`    ${f}`));
+      }
+      if (note) {
+        console.log("");
+        console.log(chalk.yellow(`    ${note}`));
+      } else {
+        console.log(chalk.dim("    Commit these to share your codebase's dominant patterns with your team."));
+      }
+      console.log("");
     }
-    console.log("");
+    if (options.injectContext) {
+      const { buildContextMarkdown } = await import("../../output/context-md.js");
+      const { injectContext } = await import("../../output/inject-context.js");
+      const md = buildContextMarkdown(result, projectName, paid);
+      const injected = await injectContext(rootDir, md);
+      console.log(chalk.green(`  ✓ Injected context into ${injected.join(", ")}`));
+    }
   } catch (err: any) {
-    console.error(chalk.red(`  ✗ Failed to write context files: ${err.message}`));
+    console.error(chalk.red(`  ✗ Failed to write/inject context: ${err.message}`));
   }
 }
+
+// Test-only re-export (kept at module scope, tree-shaken from the bundle).
+export const __test_writeContextIfRequested = writeContextIfRequested;
 
 export async function logAndRender(
   result: ScanResult,

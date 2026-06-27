@@ -102,6 +102,7 @@ Common scan options:
 --deep                                    AI-powered deep analysis (requires login)
 --include / --exclude <glob>              filter the files scanned (repeatable)
 --write-context                           write committable .vibedrift/ context files
+--inject-context                          inject the context summary into CLAUDE.md (managed block; pairs with --write-context)
 --local-only                              skip every network call (fully offline)
 ```
 

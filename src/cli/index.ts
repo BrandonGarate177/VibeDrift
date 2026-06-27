@@ -89,6 +89,10 @@ program
     "--write-context",
     "write .vibedrift/context.md, fix-plan.md, fix-prompts.md, patterns.json into the project (safe to commit)",
   )
+  .option(
+    "--inject-context",
+    "inject the context summary into CLAUDE.md inside a managed block (idempotent; pairs with --write-context)",
+  )
   // File filtering
   .option(
     "--include <pattern>",
@@ -184,6 +188,7 @@ program
       verbose: options.verbose,
       projectName: options.projectName,
       writeContext: options.writeContext,
+      injectContext: options.injectContext,
       localOnly: options.localOnly,
       // Commander sets `compare: true` when --compare is passed and
       // `compare: false` for --no-compare. We default to undefined so
@@ -389,6 +394,7 @@ Examples:
   $ vibedrift --deep                   run premium AI-powered deep analysis
   $ vibedrift --local-only             scan with zero network calls
   $ vibedrift --write-context          write .vibedrift/context.md + AI prompts
+  $ vibedrift --write-context --inject-context   refresh .vibedrift + inject into CLAUDE.md
   $ vibedrift login                    sign in to enable --deep
   $ vibedrift status                   check current auth state
   $ vibedrift usage                    view this month's scan usage
