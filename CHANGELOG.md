@@ -4,6 +4,17 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## 0.14.5 — 2026-06-27
+
+### Changed
+
+- **Concentrated reimplementation now affects the score on deep scans.** When a
+  deep scan finds the same logic redundantly reimplemented across many files at
+  high density, that now lowers the Vibe Drift Score. Sparse, incidental
+  reimplementation stays informational and does not affect the score, so
+  well-structured codebases are never penalized for a stray parallel or legacy
+  implementation. Local and signed-out scans are unaffected.
+
 ## 0.14.4 — 2026-06-26
 
 ### Changed
