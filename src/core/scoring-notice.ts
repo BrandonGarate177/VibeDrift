@@ -35,7 +35,7 @@ export function shouldShowScoringNotice(opts: {
 export function scoringNoticeLine(): string {
   return (
     "We refined how the Vibe Drift Score is calculated this release. " +
-    "Your past scans were recomputed under the new scoring so your trends stay comparable. " +
+    "Your existing scores are kept as they were; the update applies to new scans. " +
     "What changed → https://vibedrift.ai/releases"
   );
 }

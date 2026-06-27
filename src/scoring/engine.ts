@@ -43,12 +43,18 @@ import {
  *        function count, so the old per-KLOC density kept rising with repo size
  *        and unfairly sank large clean repos (e.g. trpc 69.6→81.6, TanStack
  *        62.1→76.4) into the messy range. The rate is size-invariant.
+ *   v7 — concentrated reimplementation feeds the composite: panel-confirmed
+ *        redundant reimplementation now lowers the score when it is dense (>= a
+ *        per-KLOC threshold and a minimum count), re-tagged to a drift-kind
+ *        analyzer in computeScores. Sparse reimplementation stays informational.
+ *        Deep-scan scores move for repos with concentrated reimplementation;
+ *        local / free scores are unchanged.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v6";
+export const SCORING_VERSION = "v7";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;

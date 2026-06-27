@@ -4,6 +4,16 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## 0.14.6 — 2026-06-27
+
+### Changed
+
+- **Scoring version updated.** The deep-scan reimplementation change below is
+  recorded as a new scoring version. VibeDrift shows a one-time notice linking the
+  release notes and suppresses score comparisons across the version boundary, so
+  you never see a misleading delta. Existing scores are kept as they were; the new
+  scoring applies to new scans.
+
 ## 0.14.5 — 2026-06-27
 
 ### Changed
