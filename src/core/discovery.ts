@@ -25,6 +25,15 @@ const SKIP_DIRS = new Set([
   "coverage", ".turbo", ".cache", ".idea", ".vscode",
 ]);
 
+// Vendored / minified / generated FILES slip past SKIP_DIRS because they live
+// inside otherwise-scanned dirs (e.g. a checked-in jquery-3.2.1.min.js or the
+// Ace editor bundle ace.js). Their "functions" are not the user's code and
+// produce false drift / anomaly flags, so exclude them from every layer.
+const VENDORED_FILE_RE = /\.min\.(js|mjs|cjs|css)$|\.bundle\.(js|mjs|cjs)$/i;
+// A source line longer than this signals a minified/generated bundle regardless
+// of filename (hand-written source effectively never exceeds it).
+const MAX_SOURCE_LINE_LENGTH = 2000;
+
 const MAX_FILE_SIZE = 1024 * 1024;
 const MAX_FILE_COUNT = 5000;
 
@@ -84,6 +93,7 @@ export async function discoverFiles(rootDir: string): Promise<{ files: SourceFil
         await walk(fullPath);
       } else if (entry.isFile()) {
         if (ig.ignores(relPath)) continue;
+        if (VENDORED_FILE_RE.test(entry.name)) continue; // jquery-3.2.1.min.js, *.bundle.js, …
         const language = detectLanguage(entry.name);
         if (!language) continue;
 
@@ -92,8 +102,13 @@ export async function discoverFiles(rootDir: string): Promise<{ files: SourceFil
           if (info.size > MAX_FILE_SIZE) continue;
 
           const content = await readFile(fullPath, "utf-8");
-          const lineCount = content.split("\n").length;
-          files.push({ path: fullPath, relativePath: relPath, language, content, lineCount });
+          const lines = content.split("\n");
+          // Skip minified/generated bundles regardless of filename (e.g. ace.js):
+          // they pack code into very long lines; hand-written source does not.
+          let maxLineLen = 0;
+          for (const l of lines) if (l.length > maxLineLen) maxLineLen = l.length;
+          if (maxLineLen > MAX_SOURCE_LINE_LENGTH) continue;
+          files.push({ path: fullPath, relativePath: relPath, language, content, lineCount: lines.length });
         } catch {
           // Unreadable file — permission denied, broken symlink, etc.
           warnings.unreadableFiles.push(relPath);
