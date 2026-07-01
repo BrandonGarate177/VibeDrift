@@ -5,7 +5,7 @@
  * Local scan produces several signals that are suggestive but not
  * conclusive:
  *   - Code DNA finds near-duplicate function sequences (LCS 0.5–0.85)
- *     that are "maybe the same thing." Deep scan's UniXcoder
+ *     that are "maybe the same thing." Deep scan's semantic
  *     embeddings can confirm or reject semantic equivalence.
  *   - Certain function names (`handle`, `process`, `run`, `doStuff`)
  *     are generic enough that their intent is opaque from the name
@@ -26,22 +26,14 @@
 
 import type { AnalysisContext, Finding } from "../core/types.js";
 import type { CodeDnaResult, ExtractedFunction } from "../codedna/types.js";
+import { isNonShippablePath } from "../codedna/nonshippable.js";
 
-// Non-shipped path regexes — mirror of src/scoring/engine.ts (kept local to
-// avoid exporting engine internals; same set the API reimplementation detector
-// uses). Test/example/generated dup pairs were 0% precision in the recall audit.
-const REIMPL_NOT_SHIPPED_RES: RegExp[] = [
-  /(^|\/)(generated|__generated__)\/|\.(generated|gen)\.[A-Za-z0-9]+$|\.pb\.go$|_pb2?\.py$|\.min\.[A-Za-z0-9]+$/,
-  /(^|\/)(fixtures?|__fixtures__|__mocks__|mocks|snapshots|__snapshots__)\//,
-  /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[A-Za-z0-9]+$|_test\.(go|py)$|(^|\/)test_[^/]*\.py$/,
-  /(^|\/)(examples?|demos?|samples?)\//,
-];
 const REIMPL_MIN_BODY_TOKENS = 12;
 
 // Names so generic that local classification can't tell what they do.
-// Deep scan's intent-mismatch uses UniXcoder to align name and body in
-// embedding space — a mismatch surfaces when the body looks like, say,
-// data transformation but the name is just `handle`.
+// Deep scan's intent-mismatch embeds name and body separately to align them —
+// a mismatch surfaces when the body looks like, say, data transformation but
+// the name is just `handle`.
 const GENERIC_NAMES = new Set([
   "handle",
   "process",
@@ -78,28 +70,30 @@ export function generateTeaseMessages(
 
   // ─── Signal 1: near-duplicate candidates from Code DNA ───
   // LCS-similarity pairs in the 0.5–0.85 range are "look similar but
-  // we can't be sure." UniXcoder embeddings at deep-scan time
-  // disambiguate (true semantic duplicate vs. superficially alike).
+  // we can't be sure." Deep scan's semantic embeddings disambiguate
+  // (true semantic duplicate vs. superficially alike workflow shape).
   if (codeDnaResult?.sequenceSimilarities) {
+    // A pair is a credible candidate only when it is cross-file and at least
+    // one side is shippable — two test/fixture/generated helpers sharing a
+    // shape are not actionable (mirrors the deep-scan pre-filter).
+    const isCandidate = (s: { similarity: number; functionA: { file: string }; functionB: { file: string } }) =>
+      s.similarity >= NEAR_DUP_LOWER &&
+      s.similarity < NEAR_DUP_UPPER &&
+      s.functionA.file !== s.functionB.file &&
+      !(isNonShippablePath(s.functionA.file) && isNonShippablePath(s.functionB.file));
+
     const nearDups = codeDnaResult.sequenceSimilarities
-      .filter((s) => s.similarity >= NEAR_DUP_LOWER && s.similarity < NEAR_DUP_UPPER)
-      // Prefer cross-file matches — same-file near-dups are often intentional
-      // local helpers.
-      .filter((s) => s.functionA.file !== s.functionB.file)
+      .filter(isCandidate)
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, 3);
 
     if (nearDups.length > 0) {
-      const count = codeDnaResult.sequenceSimilarities.filter(
-        (s) => s.similarity >= NEAR_DUP_LOWER &&
-          s.similarity < NEAR_DUP_UPPER &&
-          s.functionA.file !== s.functionB.file,
-      ).length;
+      const count = codeDnaResult.sequenceSimilarities.filter(isCandidate).length;
       const examples = nearDups.map((s) =>
         `${s.functionA.name}() in ${shortPath(s.functionA.relativePath)} ↔ ${s.functionB.name}() in ${shortPath(s.functionB.relativePath)}`,
       );
       messages.push(
-        `${count} near-duplicate function pair${count === 1 ? "" : "s"} (LCS similarity ${(nearDups[0].similarity * 100).toFixed(0)}%) — deep scan confirms semantic equivalence via UniXcoder embeddings:`,
+        `${count} near-duplicate function pair${count === 1 ? "" : "s"} (LCS similarity ${(nearDups[0].similarity * 100).toFixed(0)}%) — deep scan checks whether these are true duplicates or just similar shapes:`,
       );
       for (const ex of examples) {
         messages.push(`  • ${ex}`);
@@ -152,7 +146,7 @@ export function generateTeaseMessages(
     const funcCount = codeDnaResult?.functions.length ?? 0;
     if (funcCount >= 20) {
       messages.push(
-        `Local analysis found no suggestive anomalies across ${funcCount} functions. Deep scan's UniXcoder anomaly detector can still surface outlier implementations that local heuristics miss.`,
+        `Local analysis found no suggestive anomalies across ${funcCount} functions. Deep scan's semantic anomaly detector can still surface outlier implementations that local heuristics miss.`,
       );
     }
   }
@@ -181,7 +175,7 @@ export function countReimplementationCandidates(functions: ExtractedFunction[]):
     if (fn.name.length < 4) continue;
     if (GENERIC_NAMES.has(fn.name)) continue;
     if (fn.bodyTokenCount < REIMPL_MIN_BODY_TOKENS) continue;
-    if (REIMPL_NOT_SHIPPED_RES.some((re) => re.test(fn.relativePath))) continue;
+    if (isNonShippablePath(fn.relativePath)) continue;
     let files = filesByName.get(fn.name);
     if (!files) {
       files = new Set();

@@ -2,7 +2,7 @@ import type { AnalysisContext, Finding } from "../core/types.js";
 import type { CodeDnaResult } from "./types.js";
 import { extractAllFunctions } from "./function-extractor.js";
 import { computeSemanticFingerprints, findDuplicateGroups, fingerprintFindings } from "./semantic-fingerprint.js";
-import { extractOperationSequences, findSequenceSimilarities, sequenceFindings } from "./operation-sequence.js";
+import { extractOperationSequences, findSequenceSimilarities } from "./operation-sequence.js";
 import { classifyPatterns, patternFindings } from "./pattern-classifier.js";
 import { analyzeTaintFlows, taintFindings } from "./taint-analysis.js";
 import { scoreDeviations, deviationFindings } from "./deviation-heuristics.js";
@@ -52,10 +52,20 @@ export function runCodeDnaAnalysis(ctx: AnalysisContext): CodeDnaResult {
   const deviationJustifications = scoreDeviations(patternDistributions, ctx.files);
   timings.deviationMs = Date.now() - t;
 
-  // Aggregate all findings
+  // Aggregate all findings.
+  //
+  // Operation-sequence similarities are deliberately NOT surfaced as findings.
+  // They measure workflow-SHAPE similarity (the abstract opcode LCS), which is a
+  // consistency signal, not evidence of duplicate logic: sibling command
+  // handlers legitimately share load->validate->log->return, so surfacing them
+  // as "near-duplicate" pairs conflates correct consistency with redundancy and
+  // is a systematic false-positive source (e.g. runDoctor vs runLogout). Genuine
+  // duplicates are caught by the body-level detectors (fingerprint, 98.7%
+  // precision, + MinHash/LCS in drift/semantic-duplication). The
+  // `sequenceSimilarities` data is retained on the result for the drift signal
+  // and the deep-scan tease, just not as a user-facing duplicate finding.
   const findings: Finding[] = [
     ...fingerprintFindings(duplicateGroups),
-    ...sequenceFindings(sequenceSimilarities),
     ...patternFindings(patternDistributions),
     ...taintFindings(taintFlows),
     ...deviationFindings(deviationJustifications),

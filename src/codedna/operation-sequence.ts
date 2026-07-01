@@ -27,6 +27,7 @@
 import type { ExtractedFunction, Operation, OperationSequence, SequenceSimilarity } from "./types.js";
 import type { Finding } from "../core/types.js";
 import { toFunctionRef } from "./function-extractor.js";
+import { isNonShippablePath } from "./nonshippable.js";
 
 /**
  * Priority order (first match wins):
@@ -282,6 +283,16 @@ export function findSequenceSimilarities(
 
       // Must be in different files
       if (seqA.functionRef.file === seqB.functionRef.file) continue;
+
+      // Skip pairs confined entirely to non-shippable code (tests, examples,
+      // fixtures, generated) — two test helpers sharing a workflow shape are
+      // not actionable. Mirrors the deep-scan pre-filter's all-sides rule.
+      if (
+        isNonShippablePath(seqA.functionRef.file) &&
+        isNonShippablePath(seqB.functionRef.file)
+      ) {
+        continue;
+      }
 
       // Must be in same domain category (skip "general" and "request_handling")
       const keyB = `${seqB.functionRef.file}::${seqB.functionRef.name}::${seqB.functionRef.line}`;

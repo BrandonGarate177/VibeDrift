@@ -198,6 +198,31 @@ describe("findDuplicateGroups", () => {
     expect(groups).toHaveLength(0);
   });
 
+  it("DROPS a group where every member is non-shippable (test/fixture/generated)", () => {
+    // Two identical `mkCtx()` helpers duplicated across test files are not a
+    // consolidatable duplicate — the deep-scan pre-filter drops this class and
+    // the CLI must agree so it does not surface test-fixture noise as a finding.
+    const body = "const total = 1 + 2; return total;";
+    const fns = [
+      mkFn({ name: "mkCtx", file: "test/unit/a.test.ts", rawBody: body }),
+      mkFn({ name: "mkCtx", file: "test/unit/b.test.ts", rawBody: body }),
+    ];
+    const fps = computeSemanticFingerprints(fns);
+    const groups = findDuplicateGroups(fps, fns);
+    expect(groups).toHaveLength(0);
+  });
+
+  it("KEEPS a group when at least one member is shippable (real helper copied into a test)", () => {
+    const body = "const total = 1 + 2; return total;";
+    const fns = [
+      mkFn({ name: "compute", file: "src/util.ts", rawBody: body }),
+      mkFn({ name: "compute", file: "test/unit/util.test.ts", rawBody: body }),
+    ];
+    const fps = computeSemanticFingerprints(fns);
+    const groups = findDuplicateGroups(fps, fns);
+    expect(groups).toHaveLength(1);
+  });
+
   it("FNV + SHA-256 two-pass: no false positives on 1000 synthetic structurally-unique bodies", () => {
     // If the two-pass verification ever fails, multiple structurally
     // distinct bodies will land in the same group via an FNV collision.
