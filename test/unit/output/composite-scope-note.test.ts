@@ -50,73 +50,77 @@ function mkResult(overrides: Partial<ScanResult>): ScanResult {
 
 describe("compositeScopeNote (pure)", () => {
   it("returns empty when all categories are applicable", () => {
-    expect(compositeScopeNote(5, 5)).toBe("");
+    expect(compositeScopeNote(4, 4)).toBe("");
   });
 
   it("returns a scope qualifier when fewer than all categories scored", () => {
-    expect(compositeScopeNote(3, 5)).toBe("(over 3 of 5 categories)");
+    expect(compositeScopeNote(3, 4)).toBe("(over 3 of 4 categories)");
   });
 
   it("returns a scope qualifier for a single-category scope", () => {
-    expect(compositeScopeNote(1, 5)).toBe("(over 1 of 5 categories)");
+    expect(compositeScopeNote(1, 4)).toBe("(over 1 of 4 categories)");
   });
 });
 
 describe("applicableCategoryCount (pure)", () => {
-  it("counts all 5 when every category is applicable", () => {
+  it("counts the four drift-display categories when every one is applicable (Dependency Health is not a drift dimension)", () => {
     const r = mkResult({});
-    expect(applicableCategoryCount(r.scores)).toBe(5);
+    expect(applicableCategoryCount(r.scores)).toBe(4);
   });
 
   it("excludes N/A categories from the count", () => {
     const r = mkResult({
       scores: {
         ...mkResult({}).scores,
-        dependencyHealth: { score: 0, maxScore: 20, locked: false, findingCount: 0, applicable: false },
         securityPosture: { score: 0, maxScore: 20, locked: false, findingCount: 0, applicable: false },
       } as ScanResult["scores"],
     });
+    // arch + redundancy + intent = 3 (dependencyHealth never counts on the
+    // drift track; security is N/A here)
     expect(applicableCategoryCount(r.scores)).toBe(3);
   });
 });
 
 describe("renderTerminalOutput composite scope qualifier", () => {
-  it("appends 'of 5 categories' when two drift categories are N/A", () => {
+  it("appends 'of 4 categories' when a drift category is N/A", () => {
     const out = renderTerminalOutput(
       mkResult({
         scores: {
           ...mkResult({}).scores,
-          dependencyHealth: { score: 0, maxScore: 20, locked: false, findingCount: 0, applicable: false },
           securityPosture: { score: 0, maxScore: 20, locked: false, findingCount: 0, applicable: false },
         } as ScanResult["scores"],
       }),
     );
-    expect(out).toContain("of 5 categories");
-    expect(out).toContain("over 3 of 5 categories");
+    expect(out).toContain("of 4 categories");
+    expect(out).toContain("over 3 of 4 categories");
+  });
+
+  it("does NOT show Dependency Health in the drift score card", () => {
+    const out = renderTerminalOutput(mkResult({}));
+    expect(out).not.toContain("Dependency Health");
   });
 
   it("does NOT add the qualifier when all categories are applicable", () => {
     const out = renderTerminalOutput(mkResult({}));
-    expect(out).not.toContain("of 5 categories");
+    expect(out).not.toContain("of 4 categories");
   });
 });
 
 describe("renderHtmlReport composite scope qualifier (hero mirror)", () => {
-  it("surfaces 'composite over 3 of 5 categories' near the hero when two are N/A", () => {
+  it("surfaces 'composite over 3 of 4 categories' near the hero when one is N/A", () => {
     const html = renderHtmlReport(
       mkResult({
         scores: {
           ...mkResult({}).scores,
-          dependencyHealth: { score: 0, maxScore: 20, locked: false, findingCount: 0, applicable: false },
           securityPosture: { score: 0, maxScore: 20, locked: false, findingCount: 0, applicable: false },
         } as ScanResult["scores"],
       }),
     );
-    expect(html).toContain("over 3 of 5 categories");
+    expect(html).toContain("over 3 of 4 categories");
   });
 
   it("does NOT add the hero qualifier when all categories are applicable", () => {
     const html = renderHtmlReport(mkResult({}));
-    expect(html).not.toContain("of 5 categories");
+    expect(html).not.toContain("of 4 categories");
   });
 });

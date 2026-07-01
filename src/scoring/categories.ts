@@ -142,6 +142,15 @@ export const CATEGORY_CONFIG: Record<ScoringCategory, CategoryConfig> = {
 
 export const ALL_CATEGORIES = Object.keys(CATEGORY_CONFIG) as ScoringCategory[];
 
+/** Drift categories that actually have a drift detector. Dependency Health has
+ * only hygiene analyzers (no drift detector) so it is never a drift dimension —
+ * excluded from the drift score DISPLAY + scope note. It still scores on the
+ * Hygiene track. If a dependency-drift detector is ever added, it reappears
+ * automatically. */
+export const DRIFT_DISPLAY_CATEGORIES = ALL_CATEGORIES.filter((c) =>
+  CATEGORY_CONFIG[c].analyzers.some((a) => a.kind === "drift"),
+);
+
 /**
  * Lookup the kind of an analyzer ID.
  *

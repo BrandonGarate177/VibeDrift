@@ -8,7 +8,7 @@
 
 import chalk from "chalk";
 import type { ScanResult, Finding } from "../core/types.js";
-import { CATEGORY_CONFIG, ALL_CATEGORIES, getAnalyzerKind } from "../scoring/categories.js";
+import { CATEGORY_CONFIG, ALL_CATEGORIES, DRIFT_DISPLAY_CATEGORIES, getAnalyzerKind } from "../scoring/categories.js";
 import { scoreBar, padRight, formatCount } from "./format.js";
 import { scorePercentiles } from "../scoring/engine.js";
 import { isPeerGroundedEntitled, type Plan } from "../auth/plan.js";
@@ -403,7 +403,7 @@ function renderFindingsList(result: ScanResult): string[] {
   // Drift findings only — hygiene findings render separately in their own
   // pane below so they don't contaminate the Vibe Drift Score narrative.
   const driftFindings = result.findings.filter((f) => getAnalyzerKind(f.analyzerId) === "drift");
-  for (const cat of ALL_CATEGORIES) {
+  for (const cat of DRIFT_DISPLAY_CATEGORIES) {
     const config = CATEGORY_CONFIG[cat];
     const s = result.scores[cat];
 
@@ -544,15 +544,17 @@ function renderHygienePane(result: ScanResult): string[] {
  * Count the drift categories that actually scored. The composite is a
  * geometric mean over only the APPLICABLE categories (see scoring/engine.ts),
  * so this is the true denominator behind the headline "X/100" — which can be
- * fewer than the five total categories when some are N/A (not applicable for
- * the project's languages, or no drift surface was measured).
+ * fewer than the total DRIFT_DISPLAY_CATEGORIES when some are N/A (not
+ * applicable for the project's languages, or no drift surface was measured).
+ * Dependency Health has no drift detector, so it is never counted here (it
+ * lives on the Hygiene track).
  *
  * Pure and unit-tested so the headline can never silently imply a full
- * five-category verdict when the score really spans N<5.
+ * four-category verdict when the score really spans N<4.
  */
 export function applicableCategoryCount(scores: ScanResult["scores"]): number {
   let n = 0;
-  for (const cat of ALL_CATEGORIES) {
+  for (const cat of DRIFT_DISPLAY_CATEGORIES) {
     if (scores[cat]?.applicable) n++;
   }
   return n;
@@ -573,16 +575,16 @@ function renderCategoryBars(result: ScanResult): string[] {
   const lines: string[] = [];
   lines.push(chalk.bold("\u2500\u2500 Vibe Drift Score \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"));
 
-  for (const cat of ALL_CATEGORIES) {
+  for (const cat of DRIFT_DISPLAY_CATEGORIES) {
     const config = CATEGORY_CONFIG[cat];
     const s = result.scores[cat];
     const label = padRight(config.name, 28);
 
     if (!s.applicable) {
-      // Reason-aware N/A: Dependency Health has no drift detector yet (genuinely
-      // not measured); every other category ran but found no applicable code.
-      const naNote = cat === "dependencyHealth" ? "not yet measured" : "no findings in this repo";
-      lines.push(chalk.dim(`  ${label}   N/A — ${naNote}`));
+      // These are drift categories whose detector ran but found no applicable
+      // code in this repo (Dependency Health is not shown here — it has no drift
+      // detector and lives on the Hygiene track).
+      lines.push(chalk.dim(`  ${label}   N/A — no findings in this repo`));
     } else {
       const color = scoreColorFn(s.score, s.maxScore);
       const bar = color(scoreBar(s.score, s.maxScore));
@@ -604,7 +606,7 @@ function renderCategoryBars(result: ScanResult): string[] {
   // five-category verdict.
   const scopeNote = compositeScopeNote(
     applicableCategoryCount(result.scores),
-    ALL_CATEGORIES.length,
+    DRIFT_DISPLAY_CATEGORIES.length,
   );
   const scopeSuffix = scopeNote ? `  ${chalk.dim(scopeNote)}` : "";
   lines.push(`  ${padRight("Vibe Drift Score:", 28)} ${totalColor(`${result.compositeScore.toFixed(0)}/${result.maxCompositeScore}`)}${scopeSuffix}`);

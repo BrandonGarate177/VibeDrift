@@ -3,7 +3,7 @@ import { getVersion } from "../core/version.js";
 import { buildFixPromptMarkdown, buildFullFixPlanMarkdown, findingKey, type FixPromptContext } from "./fix-prompt.js";
 import { estimateScoreAfterFixes } from "../scoring/engine.js";
 import { hasMeaningfulImpact } from "./fix-plan-select.js";
-import { getAnalyzerKind, ALL_CATEGORIES } from "../scoring/categories.js";
+import { getAnalyzerKind, DRIFT_DISPLAY_CATEGORIES } from "../scoring/categories.js";
 import { applicableCategoryCount, compositeScopeNote } from "./terminal.js";
 import { formatCount } from "./format.js";
 
@@ -371,7 +371,7 @@ function buildSummaryHero(result: ScanResult, detailedUrl: string): string {
   // applicable categories, so when some cat-cards render N/A the headline /100
   // spans N<5 categories. Surface it near the hero so the score is never read
   // as a full five-category verdict. Mirrors the terminal renderer.
-  const scopeNote = compositeScopeNote(applicableCategoryCount(scores), ALL_CATEGORIES.length);
+  const scopeNote = compositeScopeNote(applicableCategoryCount(scores), DRIFT_DISPLAY_CATEGORIES.length);
   const scopeLine = scopeNote
     ? `<p class="va-def">Composite ${esc(scopeNote.replace(/^\(|\)$/g, ""))} — the remaining categories had no signals in this repo.</p>`
     : "";
@@ -430,13 +430,14 @@ function buildSummaryHero(result: ScanResult, detailedUrl: string): string {
 
 function buildCategoryBreakdown(result: ScanResult): string {
   const scores = result.scores as unknown as Record<string, { score: number; maxScore: number; applicable: boolean }>;
-  const cards = SCORING_CATEGORY_ORDER.map((cat) => {
+  // Dependency Health is not shown on the drift score display — it has no drift
+  // detector and lives on the Hygiene track. Exclude it from the drift cards.
+  const cards = SCORING_CATEGORY_ORDER.filter((cat) => cat !== "dependencyHealth").map((cat) => {
     const s = scores[cat];
     const label = esc(SCORING_CATEGORY_LABELS[cat]);
     if (!s || !s.applicable) {
-      // Reason-aware N/A: Dependency Health has no drift detector yet; other
-      // categories ran but found no applicable code in this repo.
-      const naNote = cat === "dependencyHealth" ? "Not yet measured" : "No findings in this repo";
+      // These drift detectors ran but found no applicable code in this repo.
+      const naNote = "No findings in this repo";
       return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">${naNote}</div></div>`;
     }
     const catPct = s.maxScore > 0 ? (s.score / s.maxScore) * 100 : 0;
@@ -556,7 +557,9 @@ function buildScoreRecap(result: ScanResult): string {
   const g = gradeTokens(compositeScore, maxCompositeScore);
   const scores = result.scores as unknown as Record<string, { score: number; maxScore: number; applicable: boolean }>;
 
-  const bars = SCORING_CATEGORY_ORDER.map((cat) => {
+  // Dependency Health is not shown on the drift score display (no drift
+  // detector; lives on the Hygiene track). Exclude it from the drift bars.
+  const bars = SCORING_CATEGORY_ORDER.filter((cat) => cat !== "dependencyHealth").map((cat) => {
     const s = scores[cat];
     const label = esc(SCORING_CATEGORY_LABELS[cat]);
     if (!s || !s.applicable) {

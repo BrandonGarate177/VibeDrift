@@ -6,6 +6,15 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+## 0.14.8 — 2026-07-01
+
+### Changed
+
+- **Dependency Health is no longer shown as a scored category.** It has no drift
+  check yet, so it always read "N/A"; the dependency signals it does have (unused
+  / phantom packages) continue to feed the Hygiene score. The Vibe Drift Score
+  now shows four drift dimensions.
+
 ## 0.14.7 — 2026-07-01
 
 ### Added

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeScores } from "../../../src/scoring/engine.js";
-import { isCategoryApplicable } from "../../../src/scoring/categories.js";
+import { isCategoryApplicable, DRIFT_DISPLAY_CATEGORIES } from "../../../src/scoring/categories.js";
 import { applicableCategoryCount } from "../../../src/output/terminal.js";
 import type { Finding } from "../../../src/core/types.js";
 
@@ -49,6 +49,22 @@ describe("why a category is N/A: drift-detector presence (isCategoryApplicable)"
     for (const cat of ["architecturalConsistency", "redundancy", "securityPosture", "intentClarity"] as const) {
       expect(isCategoryApplicable(cat, ["typescript"], "drift")).toBe(true);
     }
+  });
+});
+
+describe("DRIFT_DISPLAY_CATEGORIES: the drift score DISPLAY excludes Dependency Health", () => {
+  it("has exactly four categories, none of them dependencyHealth", () => {
+    expect(DRIFT_DISPLAY_CATEGORIES).toHaveLength(4);
+    expect(DRIFT_DISPLAY_CATEGORIES).not.toContain("dependencyHealth");
+  });
+
+  it("is exactly the drift-detector-backed categories", () => {
+    expect([...DRIFT_DISPLAY_CATEGORIES]).toEqual([
+      "architecturalConsistency",
+      "redundancy",
+      "securityPosture",
+      "intentClarity",
+    ]);
   });
 });
 
