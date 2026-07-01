@@ -579,7 +579,10 @@ function renderCategoryBars(result: ScanResult): string[] {
     const label = padRight(config.name, 28);
 
     if (!s.applicable) {
-      lines.push(chalk.dim(`  ${label}   N/A — not scored`));
+      // Reason-aware N/A: Dependency Health has no drift detector yet (genuinely
+      // not measured); every other category ran but found no applicable code.
+      const naNote = cat === "dependencyHealth" ? "not yet measured" : "no findings in this repo";
+      lines.push(chalk.dim(`  ${label}   N/A — ${naNote}`));
     } else {
       const color = scoreColorFn(s.score, s.maxScore);
       const bar = color(scoreBar(s.score, s.maxScore));

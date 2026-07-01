@@ -434,7 +434,10 @@ function buildCategoryBreakdown(result: ScanResult): string {
     const s = scores[cat];
     const label = esc(SCORING_CATEGORY_LABELS[cat]);
     if (!s || !s.applicable) {
-      return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">No signals in this repo</div></div>`;
+      // Reason-aware N/A: Dependency Health has no drift detector yet; other
+      // categories ran but found no applicable code in this repo.
+      const naNote = cat === "dependencyHealth" ? "Not yet measured" : "No findings in this repo";
+      return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">${naNote}</div></div>`;
     }
     const catPct = s.maxScore > 0 ? (s.score / s.maxScore) * 100 : 0;
     const col = pctToken(catPct);
