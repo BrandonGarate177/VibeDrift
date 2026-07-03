@@ -59,4 +59,10 @@ jobs:
             | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
       - name: Scan for committed secrets
-        run: gitleaks detect --source . --config .gitleaks.toml --redact --no-banner --verbose
+        # Scope the scan to the pushed ref's own history (`--log-opts="HEAD"`): a
+        # push-to-main run validates main, and a PR run validates the PR head. Without
+        # this, fetch-depth:0 pulls every branch and gitleaks scans them all, so an
+        # unrelated WIP branch's OSS-derived fixtures (e.g. an extracted hono jwt.test
+        # `-----BEGIN PRIVATE KEY-----` template, which holds no real key) would fail
+        # main. Each branch is still scanned by its own PR run.
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --no-banner --verbose --log-opts="HEAD"
