@@ -109,7 +109,7 @@ export const CATEGORY_CONFIG: Record<ScoringCategory, CategoryConfig> = {
     ],
   },
   securityPosture: {
-    name: "Security Posture",
+    name: "Security Consistency",
     maxScore: 20,
     analyzers: [
       // Generic OWASP regex checks
@@ -117,6 +117,10 @@ export const CATEGORY_CONFIG: Record<ScoringCategory, CategoryConfig> = {
       // Cross-file auth/validation/rate-limiting consistency — real drift
       // (analyzerId `drift-security_posture`, from driftCategory).
       { id: "drift-security_posture", applicableLanguages: "all", kind: "drift" },
+      // Route-consistency findings with too few peer routes to score
+      // (see applySecurityMinPeerFloor). Advisory: renders on the hygiene
+      // track, never touches the drift composite.
+      { id: "security_posture-advisory", applicableLanguages: "all", kind: "hygiene" },
       // Code DNA taint analysis
       { id: "codedna-taint", applicableLanguages: "all", kind: "drift" },
     ],

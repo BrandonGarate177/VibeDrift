@@ -11,7 +11,7 @@ const SCORING_CATEGORY_LABELS: Record<string, string> = {
   architecturalConsistency: "Architectural",
   redundancy: "Redundancy",
   dependencyHealth: "Dependencies",
-  securityPosture: "Security",
+  securityPosture: "Security Consistency",
   intentClarity: "Intent Clarity",
 };
 
@@ -435,10 +435,14 @@ function buildCategoryBreakdown(result: ScanResult): string {
   const cards = SCORING_CATEGORY_ORDER.filter((cat) => cat !== "dependencyHealth").map((cat) => {
     const s = scores[cat];
     const label = esc(SCORING_CATEGORY_LABELS[cat]);
+    const gloss =
+      cat === "securityPosture"
+        ? `<div class="note">Consistency of this repo's own auth and validation patterns, not the absence of vulnerabilities.</div>`
+        : "";
     if (!s || !s.applicable) {
       // These drift detectors ran but found no applicable code in this repo.
       const naNote = "No findings in this repo";
-      return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">${naNote}</div></div>`;
+      return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">${naNote}</div>${gloss}</div>`;
     }
     const catPct = s.maxScore > 0 ? (s.score / s.maxScore) * 100 : 0;
     const col = pctToken(catPct);
@@ -446,6 +450,7 @@ function buildCategoryBreakdown(result: ScanResult): string {
       <div class="top"><span class="name">${label}</span><span class="gdot" style="background:${col}"></span></div>
       <div class="val num">${s.score.toFixed(1)}<span class="s"> /${s.maxScore}</span></div>
       <div class="t"><i style="width:${catPct.toFixed(0)}%;background:${col}"></i></div>
+      ${gloss}
     </div>`;
   }).join("");
 
@@ -653,7 +658,7 @@ function buildIntentCoherenceHeatmap(result: ScanResult): string {
 
 const DRIFT_CAT_LABEL: Record<string, string> = {
   architectural_consistency: "Architectural consistency",
-  security_posture: "Security posture",
+  security_posture: "Security consistency",
   semantic_duplication: "Semantic duplication",
   naming_conventions: "Convention drift",
   phantom_scaffolding: "Phantom scaffolding",
@@ -686,6 +691,9 @@ function buildDriftFindingsLibrary(result: ScanResult): string {
   const groups = order.map((cat) => ({
     cat,
     label: DRIFT_CAT_LABEL[cat] ?? cat,
+    // result.driftFindings already excludes below-floor route-consistency
+    // security findings (scoredDriftView at the scan source), so no per-widget
+    // gate is needed here.
     findings: (result.driftFindings ?? []).filter((f) => f.driftCategory === cat),
   })).filter((g) => g.findings.length > 0);
   if (groups.length === 0) return "";
@@ -951,6 +959,9 @@ function buildEmbeddedData(result: ScanResult): string {
     fileCount: result.context.files.length,
     totalLines: result.context.totalLines,
     scanTimeMs: result.scanTimeMs,
+    // result.driftFindings already excludes below-floor security findings
+    // (scoredDriftView at the scan source), so the client-side "Export CSV"
+    // data cannot list one under "DRIFT FINDINGS" either.
     driftFindings: (result.driftFindings ?? []).map((d) => ({
       severity: d.severity,
       category: d.driftCategory,
@@ -1137,7 +1148,7 @@ a:hover{text-decoration-color:var(--brand)}
 .va-cat .t{height:5px;border-radius:3px;background:var(--bg-code);margin-top:10px;overflow:hidden}
 .va-cat .t i{display:block;height:100%;border-radius:3px}
 .va-cat.na .val{color:var(--text-tertiary);font-size:18px}
-.va-cat.na .note{font-size:11px;color:var(--text-tertiary);margin-top:8px}
+.va-cat .note{font-size:11px;color:var(--text-tertiary);margin-top:8px}
 
 /* fix first */
 .va-fix{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
