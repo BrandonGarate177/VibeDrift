@@ -54,7 +54,7 @@ export interface DriftContext {
 }
 
 export interface DriftFile {
-  path: string;
+  relativePath: string;
   language: string | null;
   content: string;
   lineCount: number;
