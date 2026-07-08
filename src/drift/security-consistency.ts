@@ -136,7 +136,7 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
     const pyRateLimit = /(?:@\w+\.\w+\s*\([^)]*[Ll]imit|RateLimiter|Limiter\(|add_middleware\s*\([^,)]*[Ll]imit)/.test(c);
     const pyValidation = /add_middleware\s*\([^,)]*[Vv]alid/.test(c);
 
-    index.set(file.path, {
+    index.set(file.relativePath, {
       hasAuth: jsAuth || goAuth || pyAuth,
       hasValidation: jsValidation || goValidation || pyValidation,
       hasRateLimit: jsRateLimit || goRateLimit || pyRateLimit,
@@ -172,7 +172,7 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
   const lines = file.content.split("\n");
   const echoPattern = /\.\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(\s*"([^"]+)"/;
   const gorillaPattern = /HandleFunc\s*\(\s*"([^"]+)".*\.Methods\s*\(\s*"(\w+)"/;
-  const fileMiddleware = fileMw.get(file.path);
+  const fileMiddleware = fileMw.get(file.relativePath);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -191,7 +191,7 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
     const perRate = /[Rr]ate[Ll]imit|[Tt]hrottle/.test(context + handlerContent);
 
     routes.push({
-      method, path, file: file.path, line: i + 1,
+      method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
@@ -203,7 +203,7 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
 function extractJsRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
   const lines = file.content.split("\n");
   const expressPattern = /\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`]+)['"`]/;
-  const fileMiddleware = fileMw.get(file.path);
+  const fileMiddleware = fileMw.get(file.relativePath);
 
   for (let i = 0; i < lines.length; i++) {
     const match = lines[i].match(expressPattern);
@@ -217,7 +217,7 @@ function extractJsRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
     const perRate = /rateLimit|throttle|limiter/.test(context);
 
     routes.push({
-      method, path, file: file.path, line: i + 1,
+      method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
@@ -229,7 +229,7 @@ function extractJsRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
 function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
   const lines = file.content.split("\n");
   const routePattern = /@\w+\.(?:route|get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/;
-  const fileMiddleware = fileMw.get(file.path);
+  const fileMiddleware = fileMw.get(file.relativePath);
 
   for (let i = 0; i < lines.length; i++) {
     const match = lines[i].match(routePattern);
@@ -243,7 +243,7 @@ function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<s
     const perRate = /rate_limit|throttle|limiter/.test(context);
 
     routes.push({
-      method, path, file: file.path, line: i + 1,
+      method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
