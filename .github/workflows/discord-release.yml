@@ -26,7 +26,6 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
           EVENT_BODY: ${{ github.event.release.body }}
-          EVENT_AUTHOR: ${{ github.event.release.author.login }}
         run: |
           # Skip quietly if the secret isn't configured, so a missing webhook
           # never hard-fails a release.
@@ -35,20 +34,21 @@ jobs:
             exit 0
           fi
 
-          # On a release event the tag/body/author arrive in the payload; on a
+          # On a release event the tag/body arrive in the payload; on a
           # manual run they don't, so fall back to the latest published release.
           if [ -n "$EVENT_TAG" ]; then
-            TAG="$EVENT_TAG"; BODY="$EVENT_BODY"; AUTHOR="$EVENT_AUTHOR"
+            TAG="$EVENT_TAG"; BODY="$EVENT_BODY"
           else
             TAG=$(gh release view --repo "$REPO" --json tagName -q .tagName)
             BODY=$(gh release view "$TAG" --repo "$REPO" --json body -q .body)
-            AUTHOR=$(gh release view "$TAG" --repo "$REPO" --json author -q .author.login)
           fi
           VERSION="${TAG#v}"
 
-          # Build "Thanks to contributors" from commit authors since the previous
-          # release, minus the person who cut the release and bots. Discord pings
-          # need Discord IDs, so map GitHub login -> Discord ID via
+          # Build "Thanks to contributors" from EVERY commit author since the
+          # previous release (bots excluded). The maintainer who cut the release
+          # is credited too whenever they authored commits in it — the release is
+          # their work, not just the other contributors'. Discord pings need
+          # Discord IDs, so map GitHub login -> Discord ID via
           # .github/discord-contributors.json when present; otherwise link the
           # contributor's GitHub profile (still credit, just not a ping).
           MENTIONS=""
@@ -56,8 +56,7 @@ jobs:
           if [ -n "$PREV" ] && [ "$PREV" != "null" ]; then
             LOGINS=$(gh api "repos/$REPO/compare/$PREV...$TAG" \
               --jq '[.commits[].author.login] | map(select(. != null)) | unique | .[]' 2>/dev/null \
-              | grep -viE '\[bot\]$' \
-              | { if [ -n "$AUTHOR" ]; then grep -vixF "$AUTHOR"; else cat; fi; } || true)
+              | grep -viE '\[bot\]$' || true)
             while IFS= read -r login; do
               [ -z "$login" ] && continue
               did=$(jq -r --arg l "$login" '.[$l] // empty' .github/discord-contributors.json 2>/dev/null || true)
