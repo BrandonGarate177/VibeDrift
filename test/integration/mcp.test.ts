@@ -33,7 +33,7 @@ async function connect(home: string): Promise<Client> {
   const transport = new StdioClientTransport({
     command: "node",
     args: [CLI, "mcp"],
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home },
   });
   const client = new Client({ name: "test-client", version: "0.0.0" });
   await client.connect(transport);
