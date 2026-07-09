@@ -197,3 +197,82 @@ describe("parseImports — dynamic await import()", () => {
     expect(sources.size).toBe(0);
   });
 });
+
+describe("import-resolver — real path resolution", () => {
+  it("resolves relative .js import to .ts file (extension mapping)", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/utils/helpers.ts", "src/cli/scan.ts"]);
+
+    const result = resolveImportSource("../utils/helpers.js", "src/cli/scan.ts", index);
+    expect(result).toBe("src/utils/helpers.ts");
+  });
+
+  it("resolves extensionless import by trying .ts", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/core/types.ts", "src/cli/scan.ts"]);
+
+    const result = resolveImportSource("../core/types", "src/cli/scan.ts", index);
+    expect(result).toBe("src/core/types.ts");
+  });
+
+  it("resolves directory import to index.ts", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/analyzers/index.ts", "src/cli/scan.ts"]);
+
+    const result = resolveImportSource("../analyzers", "src/cli/scan.ts", index);
+    expect(result).toBe("src/analyzers/index.ts");
+  });
+
+  it("resolves @/ path alias to src/", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/lib/foo.ts"]);
+    const config = { pathAliases: { "@/*": "src/*" } };
+
+    const result = resolveImportSource("@/lib/foo", "src/cli/scan.ts", index, config);
+    expect(result).toBe("src/lib/foo.ts");
+  });
+
+  it("returns null for bare package imports", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/cli/scan.ts"]);
+
+    expect(resolveImportSource("react", "src/cli/scan.ts", index)).toBeNull();
+    expect(resolveImportSource("@supabase/supabase-js", "src/cli/scan.ts", index)).toBeNull();
+    expect(resolveImportSource("node:fs", "src/cli/scan.ts", index)).toBeNull();
+    expect(resolveImportSource("zod", "src/cli/scan.ts", index)).toBeNull();
+  });
+
+  it("returns null for relative imports that point to non-existent files", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/cli/scan.ts", "src/core/types.ts"]);
+
+    expect(resolveImportSource("./nonexistent", "src/cli/scan.ts", index)).toBeNull();
+    expect(resolveImportSource("../missing/module.js", "src/cli/scan.ts", index)).toBeNull();
+  });
+
+  it("two files with the same basename in different directories do NOT collide", async () => {
+    const { buildImportGraph } = await import("../../../src/core/import-graph.js");
+
+    // Two files named "helpers.ts" in different directories
+    const utilsHelper = makeFile(
+      `export function formatDate() {}\n`,
+      "src/utils/helpers.ts",
+    );
+    const testHelper = makeFile(
+      `export function mockDb() {}\n`,
+      "test/helpers.ts",
+    );
+    // Only imports src/utils/helpers, NOT test/helpers
+    const consumer = makeFile(
+      `import { formatDate } from "../utils/helpers.js";\n`,
+      "src/cli/scan.ts",
+    );
+
+    const graph = buildImportGraph([utilsHelper, testHelper, consumer]);
+
+    // src/utils/helpers.ts should get 1 incoming (from scan.ts)
+    expect(graph.incomingCount.get("src/utils/helpers.ts")).toBe(1);
+    // test/helpers.ts should get 0 — the import resolves to src/utils, not test/
+    expect(graph.incomingCount.get("test/helpers.ts")).toBe(0);
+  });
+});
