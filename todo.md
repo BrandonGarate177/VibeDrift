@@ -1,5 +1,48 @@
 # CLI backlog
 
+- **Security floor precision gate only covers `private-key`.** The calibration
+  floor-precision gate (`test/calibration/precision-recall.ts`) exercises only the
+  `private-key` floor rule because the fixture corpus has no `.go` files, so
+  `go-tls-skip-verify`'s false-positive rate is unmeasured (not just under-weighted).
+  Add a Go fixture to the calibration corpus so the "floor precision >= 0.95" claim
+  covers all five floor rules, not one. (The composite `calibrate:monotonic`
+  non-responsiveness at low injection rates is pre-existing and tracked with the
+  scoring-formula responsiveness work, not here.)
+
+- **Security suppression: regex-fallback over-suppression on unterminated strings.**
+  In `src/drift/security-suppression.ts`, the AST comment-node path is immune, but
+  the textual regex fallback's `stripStringLiterals` only blanks CLOSED quote spans.
+  An unterminated string containing `// @vibedrift-public` therefore survives and is
+  read as a comment, dropping the route from the security denominator (over-suppression
+  hides a route). Only reachable in a global no-parser degraded mode (tree-sitter WASM
+  fails to init), so low risk. Two fixes: (1) correct the inverted safe-direction code
+  comment at `security-suppression.ts:55-58` (it wrongly says under-strip is safe);
+  (2) strip an unterminated quote to end-of-line before scanning for a comment marker,
+  so the fallback fails to the safe under-match side. Never-over-suppress is the
+  dominating invariant.
+
+- **Security Consistency is not at parity across supported languages.** The
+  route/auth consistency detector (`extractRoutes`, `security-consistency.ts`)
+  covers 3 of the 5 supported languages, at uneven precision, and the AST
+  precision upgrade from the Phase 1 wedge is JS/TS-only:
+  - **Rust: zero coverage.** There is no Rust route extractor at all — the
+    `extractRoutes` dispatch silently skips Rust, so Axum/Actix/Rocket services
+    produce no security-consistency signal. (The Phase 1 plan text claiming a
+    "regex fallback for Go/Python/Rust" was wrong; no Rust extractor ever
+    existed. Corrected in the plan.)
+  - **Python/Go: still line-window regex, un-upgraded and unverified.**
+    `extractPythonRoutes` / `extractGoRoutes` read auth/validation/rate-limit
+    from a ±10–30 line proximity window, not from parsed middleware args, so
+    they both false-positive (auth keyword nearby but not applied) and
+    false-negate (auth applied via a pattern not in the regex). They did NOT get
+    the receiver whitelist, `router.use()` inheritance, or the over-capture fix
+    (`cache.get`) the JS/TS AST path got, and were not smoke-tested on the latest
+    build (only JS was exercised in the Phase 1 verification).
+  Full remediation is drafted as a dedicated phase:
+  `PLAN-security-conformance-phase-multilang.md` (port the AST extractor to
+  Python + Go, add a first Rust extractor, per-language calibration). Warrants
+  its own branch, not a fold into the current work.
+
 - **Mounted-router middleware resolution needs proper module resolution.** The
   Security Consistency detector should resolve `app.use('/api', apiRouter)`
   cross-file so a router-level guard propagates to the mounted routes. A
@@ -12,13 +55,6 @@
   importing file's directory to an exact path, refuse bare/aliased specifiers,
   and attribute a guard only on a single exact-path match. Security-critical (a
   false attribution is a missed vulnerability) — design deliberately.
-
-- **AST route middleware: unpack array-literal middleware.** `middlewareNames`
-  in `src/drift/security-ast.ts` doesn't unpack `router.post("/x", [requireAuth],
-  handler)` (middleware passed as an array), so a genuinely-authed route reads as
-  an unauthed deviator. Safe direction (over-flags, never falsely blesses) and
-  narrow, but a ~3-line fix: when a middleware arg is an `array` node, recurse
-  over its `namedChildren`.
 
 - **Security calibration: exercise the primary dominance vote.** The `security`
   calibration injector strips auth at the shared `INJECT_RATE` (0.34), which puts
@@ -44,6 +80,13 @@
   match the rendered (scored) view, feed `scoredDriftView(...).driftFindings` to
   both the diff digest (buildScanResult) and `saveScanResult` together (keep the
   two sources identical or a spurious per-scan diff reappears).
+  Same root cause covers the suppression-audit finding (subCategory
+  `SECURITY_SUPPRESSION_SUBCATEGORY`, `security-suppression.ts`): the diff
+  digest also reads raw `driftFindings`, so adding or removing a
+  `@vibedrift-public` annotation or allowlist entry can show up as a "new" or
+  "resolved" drift finding in the diff banner and get committed into
+  `.vibedrift/context.md`. The same fix (feed the diff digest source from
+  `scoredDriftView(...).driftFindings`) would exclude it too.
 - **`watch` renderer shows signed-out copy while authenticated** (v0.14.8): watch
   output includes the "Sign in with `vibedrift login`…" hint and free-tier deep
   tease even on a logged-in session. Fix the auth-state branch in the renderer.

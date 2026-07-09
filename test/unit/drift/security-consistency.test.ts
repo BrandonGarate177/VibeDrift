@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { securityConsistency } from "../../../src/drift/security-consistency.js";
+import { runDriftDetection } from "../../../src/drift/index.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
+import {
+  SECURITY_SUPPRESSION_SUBCATEGORY,
+  SECURITY_SUPPRESSION_ANALYZER_ID,
+} from "../../../src/drift/security-suppression.js";
 
 function mkCtx(files: DriftFile[]): DriftContext {
   return {
@@ -178,5 +183,344 @@ describe("security-consistency detector", () => {
     // Machinery-only evidence (no declared CLAUDE.md/AGENTS.md hint) -> the
     // softer 0.6 confidence tier, per analyzeUniformAuthGap.
     expect(gapFinding!.confidence).toBe(0.6);
+  });
+
+  // ── Denominator-removing suppression (@vibedrift-public annotation) ──
+  //
+  // Uses fileWithTree (AST route extraction) rather than the plain `file()`
+  // regex fixture: the regex path's per-route auth check is a sliding
+  // +/-N-line TEXT proximity window (see extractJsRoutesRegex), which in a
+  // short 5-6 line fixture sees `requireAuth` from a NEIGHBORING route's own
+  // call and marks every route in the window as authed — the AST extractor
+  // scopes auth detection to each route's own middleware arguments, which is
+  // what an annotation-suppression precision test needs.
+  describe("route suppression via @vibedrift-public", () => {
+    it("without the annotation, 4 authed + 1 unauthed mutating routes flags the unauthed one (baseline)", async () => {
+      const f = await fileWithTree(
+        "src/routes/api.ts",
+        `router.post("/items", requireAuth, createItem);\n` +
+          `router.put("/items/:id", requireAuth, updateItem);\n` +
+          `router.patch("/items/:id", requireAuth, patchItem);\n` +
+          `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+          `router.post("/public/webhook", handleWebhook);\n`,
+      );
+      const ctx = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+      const findings = securityConsistency.detect(ctx as any);
+      const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+      expect(authFinding).toBeDefined();
+      expect(authFinding!.deviatingFiles.some((d) => d.evidence[0].line === 5)).toBe(true);
+      // No suppression occurred — no audit finding either.
+      expect(findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY)).toBeUndefined();
+    });
+
+    it("suppresses the annotated unauthed route so the denominator stays honest, and cites the exclusion", async () => {
+      const f = await fileWithTree(
+        "src/routes/api.ts",
+        `router.post("/items", requireAuth, createItem);\n` +
+          `router.put("/items/:id", requireAuth, updateItem);\n` +
+          `router.patch("/items/:id", requireAuth, patchItem);\n` +
+          `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+          `// @vibedrift-public\n` +
+          `router.post("/public/webhook", handleWebhook);\n`,
+      );
+      const ctx = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+      const findings = securityConsistency.detect(ctx as any);
+
+      // The unauthed route was removed from the denominator BEFORE the vote
+      // ran, so the remaining 4 routes are 4/4 authed — ratio stays honest
+      // and no auth drift finding fires.
+      const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+      expect(authFinding).toBeUndefined();
+
+      // The exclusion is cited and counted — never silent.
+      const auditFinding = findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+      expect(auditFinding).toBeDefined();
+      expect(auditFinding!.severity).toBe("info");
+      expect(auditFinding!.totalRelevantFiles).toBe(1);
+      expect(auditFinding!.deviatingFiles).toHaveLength(1);
+      expect(auditFinding!.deviatingFiles[0].path).toBe("src/routes/api.ts");
+      expect(auditFinding!.deviatingFiles[0].evidence[0].line).toBe(6);
+      expect(auditFinding!.finding).toContain("1 route(s)");
+      expect(auditFinding!.finding).toContain("src/routes/api.ts:6");
+    });
+
+    // ── Finding 1 (over-suppression): the reviewer's exact end-to-end case ──
+    //
+    // A TRAILING `// @vibedrift-public` on route N's own line also sits on the
+    // line immediately above route N+1. The old preceding-line matcher bound it
+    // to BOTH, so an un-annotated unauthed route directly below an annotated
+    // public route was silently removed from the vote and its auth drift never
+    // fired. This test MUST fail before the Finding 1 fix.
+    it("a trailing annotation on the line ABOVE an un-annotated unauthed route does not suppress that route (Finding 1)", async () => {
+      const f = await fileWithTree(
+        "src/routes/api.ts",
+        `router.post("/items", requireAuth, createItem);\n` +
+          `router.put("/items/:id", requireAuth, updateItem);\n` +
+          `router.patch("/items/:id", requireAuth, patchItem);\n` +
+          `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+          `router.post("/public", handlePublic); // @vibedrift-public\n` +
+          `router.post("/danger", wipeEverything);\n`,
+      );
+      const ctx = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+      const findings = securityConsistency.detect(ctx as any);
+
+      // Only /public (line 5) is excluded — the trailing comment binds to its
+      // own route, never to /danger on the line below.
+      const auditFinding = findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+      expect(auditFinding).toBeDefined();
+      expect(auditFinding!.totalRelevantFiles).toBe(1);
+      expect(auditFinding!.deviatingFiles).toHaveLength(1);
+      expect(auditFinding!.deviatingFiles[0].evidence[0].line).toBe(5);
+
+      // The un-annotated /danger route stays in the denominator: with /public
+      // suppressed, the remaining routes are 4 authed /items + 1 unauthed
+      // /danger (ratio 4/5 = 0.8 > 0.75), so the auth-drift finding STILL fires
+      // and cites /danger on line 6.
+      const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+      expect(authFinding).toBeDefined();
+      expect(authFinding!.deviatingFiles.some((d) => d.evidence[0].line === 6)).toBe(true);
+    });
+
+    // ── Finding 2 (comment-vs-code awareness), AST path ──
+    it("does not suppress a route when @vibedrift-public sits inside a string literal on the line above (Finding 2)", async () => {
+      const f = await fileWithTree(
+        "src/routes/api.ts",
+        `router.post("/items", requireAuth, createItem);\n` +
+          `router.put("/items/:id", requireAuth, updateItem);\n` +
+          `router.patch("/items/:id", requireAuth, patchItem);\n` +
+          `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+          `const doc = "publish under // @vibedrift-public to opt out";\n` +
+          `router.post("/danger", wipeEverything);\n`,
+      );
+      const ctx = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+      const findings = securityConsistency.detect(ctx as any);
+
+      // The string literal is not a comment, so nothing is suppressed and the
+      // unauthed /danger route is flagged normally.
+      expect(findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY)).toBeUndefined();
+      const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+      expect(authFinding).toBeDefined();
+      expect(authFinding!.deviatingFiles.some((d) => d.evidence[0].line === 6)).toBe(true);
+    });
+
+    it("an annotation elsewhere in the file does not suppress an unrelated, un-annotated route (precision)", async () => {
+      const f = await fileWithTree(
+        "src/routes/api.ts",
+        `// @vibedrift-public\n` +
+          `router.post("/public/webhook", handleWebhook);\n` +
+          `\n` +
+          `router.post("/items", requireAuth, createItem);\n` +
+          `router.put("/items/:id", requireAuth, updateItem);\n` +
+          `router.patch("/items/:id", requireAuth, patchItem);\n` +
+          `router.delete("/items/:id", requireAuth, deleteItem);\n`,
+      );
+      const ctx = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+      const findings = securityConsistency.detect(ctx as any);
+
+      // Only the annotated webhook route (line 2) is suppressed — the 4
+      // authed /items routes below it must NOT be swept up by the same
+      // annotation two lines above them, or a real exclusion could hide
+      // routes it was never meant to touch.
+      const auditFinding = findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+      expect(auditFinding).toBeDefined();
+      expect(auditFinding!.totalRelevantFiles).toBe(1);
+      expect(auditFinding!.deviatingFiles[0].evidence[0].line).toBe(2);
+
+      // The 4 authed /items routes were NOT removed from the vote: with the
+      // webhook route suppressed out of the denominator, the remaining 4 are
+      // still all authed, so no auth drift finding fires either.
+      expect(findings.find((fnd) => fnd.subCategory === "Auth middleware")).toBeUndefined();
+    });
+  });
+});
+
+// ── Task 5: config glob allowlist (`security.allowlist`) ── end-to-end
+// through the detector, mirroring the @vibedrift-public suppression tests
+// above but suppressing via ctx.projectConfig instead of an inline comment.
+describe("route suppression via config allowlist (security.allowlist)", () => {
+  it("without the allowlist, 4 authed + 1 unauthed mutating routes flags the unauthed one (baseline)", async () => {
+    const items = await fileWithTree(
+      "src/routes/api/items.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+        `router.put("/items/:id", requireAuth, updateItem);\n` +
+        `router.patch("/items/:id", requireAuth, patchItem);\n` +
+        `router.delete("/items/:id", requireAuth, deleteItem);\n`,
+    );
+    const webhook = await fileWithTree(
+      "src/routes/api/webhook.ts",
+      `router.post("/public/webhook", handleWebhook);\n`,
+    );
+    const ctx = {
+      files: [items, webhook],
+      totalLines: items.lineCount + webhook.lineCount,
+      dominantLanguage: "typescript",
+    };
+    const findings = securityConsistency.detect(ctx as any);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    expect(findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY)).toBeUndefined();
+  });
+
+  it("a config allowlist glob removes the unauthed route from the vote (no auth finding) and the audit finding cites it", async () => {
+    const items = await fileWithTree(
+      "src/routes/api/items.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+        `router.put("/items/:id", requireAuth, updateItem);\n` +
+        `router.patch("/items/:id", requireAuth, patchItem);\n` +
+        `router.delete("/items/:id", requireAuth, deleteItem);\n`,
+    );
+    const webhook = await fileWithTree(
+      "src/routes/api/webhook.ts",
+      `router.post("/public/webhook", handleWebhook);\n`,
+    );
+    const ctx = {
+      files: [items, webhook],
+      totalLines: items.lineCount + webhook.lineCount,
+      dominantLanguage: "typescript",
+      projectConfig: { version: 1, security: { allowlist: ["src/routes/api/webhook.ts"] } },
+    };
+    const findings = securityConsistency.detect(ctx as any);
+
+    // The unauthed webhook route was removed from the denominator BEFORE the
+    // vote ran, so the remaining 4 /items routes are 4/4 authed and no auth
+    // drift finding fires.
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeUndefined();
+
+    // The exclusion is cited and counted, same as an annotation-based one.
+    const auditFinding = findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+    expect(auditFinding).toBeDefined();
+    expect(auditFinding!.totalRelevantFiles).toBe(1);
+    expect(auditFinding!.deviatingFiles[0].path).toBe("src/routes/api/webhook.ts");
+    expect(auditFinding!.deviatingFiles[0].evidence[0].line).toBe(1);
+    expect(auditFinding!.finding).toContain("1 route(s)");
+    expect(auditFinding!.finding).toContain("src/routes/api/webhook.ts:1");
+    expect(auditFinding!.finding).toContain("allowlist");
+    expect(auditFinding!.finding).toContain("src/routes/api/webhook.ts");
+  });
+
+  it("a non-matching allowlist glob does not suppress anything; the auth finding still fires (no over-suppression)", async () => {
+    const items = await fileWithTree(
+      "src/routes/api/items.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+        `router.put("/items/:id", requireAuth, updateItem);\n` +
+        `router.patch("/items/:id", requireAuth, patchItem);\n` +
+        `router.delete("/items/:id", requireAuth, deleteItem);\n`,
+    );
+    const webhook = await fileWithTree(
+      "src/routes/api/webhook.ts",
+      `router.post("/public/webhook", handleWebhook);\n`,
+    );
+    const ctx = {
+      files: [items, webhook],
+      totalLines: items.lineCount + webhook.lineCount,
+      dominantLanguage: "typescript",
+      projectConfig: { version: 1, security: { allowlist: ["src/completely/unrelated/**"] } },
+    };
+    const findings = securityConsistency.detect(ctx as any);
+
+    expect(findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY)).toBeUndefined();
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+  });
+
+  it("works with projectConfig undefined, the MCP/baseline shape (no crash, no suppression)", async () => {
+    const items = await fileWithTree(
+      "src/routes/api/items.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+        `router.put("/items/:id", requireAuth, updateItem);\n` +
+        `router.patch("/items/:id", requireAuth, patchItem);\n` +
+        `router.delete("/items/:id", requireAuth, deleteItem);\n`,
+    );
+    const webhook = await fileWithTree(
+      "src/routes/api/webhook.ts",
+      `router.post("/public/webhook", handleWebhook);\n`,
+    );
+    // No `projectConfig` key at all — the exact shape runDriftDetection sees
+    // when an AnalysisContext is built without loading one (e.g. baseline.ts).
+    const ctx = {
+      files: [items, webhook],
+      totalLines: items.lineCount + webhook.lineCount,
+      dominantLanguage: "typescript",
+    };
+    expect(() => securityConsistency.detect(ctx as any)).not.toThrow();
+    const findings = securityConsistency.detect(ctx as any);
+    expect(findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY)).toBeUndefined();
+    expect(findings.find((fnd) => fnd.subCategory === "Auth middleware")).toBeDefined();
+  });
+});
+
+// ── Finding 3: the suppression-audit finding must never be stamped with a
+//    false "code contradicts declared intent" divergence ──
+//
+// The suppression-audit finding is a COUNT of excluded routes, not a dominance
+// vote; its dominantPattern ("route excluded via @vibedrift-public") is never
+// meant to be compared against a declared convention label. Without the guard
+// in enrichWithIntentDivergence (src/drift/index.ts), any repo with a
+// security_posture intent hint would stamp the audit finding with a spurious
+// intent-divergence claim — an audit-first false statement. This pins that
+// guard while confirming a REAL auth-vote finding still diverges.
+describe("suppression-audit finding vs intent divergence (Finding 3)", () => {
+  it("does not stamp the audit finding with intent divergence, but still stamps a real auth-vote finding", async () => {
+    // Group A (src/routes/items): 4 authed + 1 annotated-public unauthed route
+    // → produces a suppression-audit finding, no auth vote (4/4 after removal).
+    const items = await fileWithTree(
+      "src/routes/items/api.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+        `router.put("/items/:id", requireAuth, updateItem);\n` +
+        `router.patch("/items/:id", requireAuth, patchItem);\n` +
+        `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+        `// @vibedrift-public\n` +
+        `router.post("/public/webhook", handleWebhook);\n`,
+    );
+    // Group B (src/routes/orders): 4 authed + 1 unauthed mutating route
+    // → real auth-vote finding (ratio 4/5 = 0.8), dominantPattern differs from
+    // the declared label, so intent divergence SHOULD stamp it.
+    const orders = await fileWithTree(
+      "src/routes/orders/orders.ts",
+      `router.post("/orders", requireAuth, a);\n` +
+        `router.put("/orders/:id", requireAuth, b);\n` +
+        `router.patch("/orders/:id", requireAuth, c);\n` +
+        `router.delete("/orders/:id", requireAuth, d);\n` +
+        `router.post("/orders/export", exportOrders);\n`,
+    );
+
+    const ctx = {
+      files: [items, orders],
+      totalLines: items.lineCount + orders.lineCount,
+      dominantLanguage: "typescript",
+      intentHints: [
+        {
+          category: "security_posture",
+          pattern: "auth_required",
+          label: "auth required on all routes",
+          source: "CLAUDE.md",
+          line: 1,
+          text: "all routes require auth",
+          confidence: 0.95,
+        },
+      ],
+    };
+
+    const { driftFindings } = runDriftDetection(ctx as any);
+
+    // The audit finding exists and carries NO intent-divergence claim.
+    const audit = driftFindings.find((f) => f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+    expect(audit).toBeDefined();
+    expect(audit!.intentDivergence).toBeUndefined();
+
+    // The real auth-vote finding still diverges from the declared convention.
+    const authVote = driftFindings.find((f) => f.subCategory === "Auth middleware");
+    expect(authVote).toBeDefined();
+    expect(authVote!.intentDivergence).toBeDefined();
+    expect(authVote!.intentDivergence!.declaredPattern).toBe("auth_required");
+    expect(authVote!.intentDivergence!.source).toBe("CLAUDE.md");
+
+    // And after conversion, the audit finding lands on the hygiene analyzerId
+    // (never the drift-security_posture track) with no intent-divergence tag.
+    const { findings } = runDriftDetection(ctx as any);
+    const auditConverted = findings.find((f) => f.analyzerId === SECURITY_SUPPRESSION_ANALYZER_ID);
+    expect(auditConverted).toBeDefined();
+    expect(auditConverted!.tags).not.toContain("intent-divergence");
   });
 });
