@@ -23,13 +23,14 @@ import { parseFiles } from "../utils/ast.js";
 import { extractAllFunctions } from "../codedna/function-extractor.js";
 import { buildSignature } from "../codedna/minhash.js";
 import { SECURITY_SUPPRESSION_SUBCATEGORY } from "../drift/security-suppression.js";
+import { isBelowSecurityPeerFloor } from "../scoring/engine.js";
 import type { AnalysisContext } from "./types.js";
 import type { DriftFinding, DriftCategory } from "../drift/types.js";
 import type { IntentHint } from "../intent/types.js";
 
 const CACHE_DIR = join(homedir(), ".vibedrift", "baseline-cache");
 /** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
-export const BASELINE_VERSION = 2;
+export const BASELINE_VERSION = 3;
 
 export interface CategoryVote {
   driftCategory: DriftCategory;
@@ -41,6 +42,10 @@ export interface CategoryVote {
   /** Files that drift in this category + the pattern each uses instead — lets
    *  check_file_drift report "your file does X, the repo does Y". */
   deviators: Array<{ path: string; detectedPattern: string }>;
+  /** True when this is a security_posture vote below MIN_SECURITY_PEERS relevant
+   *  routes: too thin to dent the score, so MCP tools surface it as advisory
+   *  rather than authoritative. Single source of truth: isBelowSecurityPeerFloor. */
+  belowPeerFloor?: boolean;
 }
 
 export interface MinhashEntry {
@@ -65,6 +70,11 @@ export interface RepoDriftBaseline {
   intentHints: IntentHint[];
   minhashIndex: MinhashEntry[];
   builtAt: number;
+  /** BASELINE_VERSION at build time. A mismatch against the current
+   *  BASELINE_VERSION means the persisted vote shape may be stale (e.g.
+   *  missing securitySubVotes) and forces a one-time rebuild; see
+   *  getBaseline in src/mcp/baseline-provider.ts. */
+  version: number;
 }
 
 /** On-disk shape: signatures degrade to number[] (JSON has no typed arrays). */
@@ -131,6 +141,7 @@ export function toCategoryVote(f: DriftFinding): CategoryVote {
     consistencyScore: f.consistencyScore,
     dominantFiles: f.dominantFiles ?? [],
     deviators: f.deviatingFiles.map((d) => ({ path: d.path, detectedPattern: d.detectedPattern })),
+    belowPeerFloor: isBelowSecurityPeerFloor({ driftCategory: f.driftCategory, totalRelevantFiles: f.totalRelevantFiles }),
   };
 }
 
@@ -194,6 +205,7 @@ export function assembleBaseline(
     intentHints: ctx.intentHints ?? [],
     minhashIndex,
     builtAt: Date.now(),
+    version: BASELINE_VERSION,
   };
 }
 

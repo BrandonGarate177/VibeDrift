@@ -16,8 +16,8 @@ function mkCtx(files: DriftFile[]): DriftContext {
   };
 }
 
-function file(path: string, content: string): DriftFile {
-  return { relativePath: path, language: "typescript", content, lineCount: content.split("\n").length };
+function file(path: string, content: string, language: DriftFile["language"] = "typescript"): DriftFile {
+  return { relativePath: path, language, content, lineCount: content.split("\n").length };
 }
 
 describe("security-consistency detector", () => {
@@ -522,5 +522,242 @@ describe("suppression-audit finding vs intent divergence (Finding 3)", () => {
     const auditConverted = findings.find((f) => f.analyzerId === SECURITY_SUPPRESSION_ANALYZER_ID);
     expect(auditConverted).toBeDefined();
     expect(auditConverted!.tags).not.toContain("intent-divergence");
+  });
+});
+
+// ── Task B1: canonical mutating-method classification ──────────────────────
+//
+// MUTATION_METHODS previously excluded Express `.all()` ("ALL") and unresolved
+// Flask routes ("ANY"), so those routes were silently dropped from BOTH the
+// auth dominance vote and its uniform-auth-gap fallback. These tests pin the
+// fix: `.all()` and a Flask `methods=[...]` mutating verb now enter the vote;
+// a bare `@app.route` (which defaults to GET, not "ANY") still does not.
+describe("canonical mutating methods (Task B1)", () => {
+  it("includes an unauthed Express .all() route in the auth vote as a deviator", async () => {
+    const f = await fileWithTree(
+      "src/routes/admin.ts",
+      `router.post("/users", requireAuth, createUser);\n` +
+        `router.put("/users/:id", requireAuth, updateUser);\n` +
+        `router.patch("/users/:id", requireAuth, patchUser);\n` +
+        `router.delete("/users/:id", requireAuth, deleteUser);\n` +
+        `router.all("/admin", handleAdmin);\n`,
+    );
+    const authMachinery = file(
+      "src/middleware/auth.ts",
+      `export function requireAuth(req, res, next) { verifyToken(req); next(); }`,
+    );
+    const ctx = {
+      files: [f, authMachinery],
+      totalLines: f.lineCount + authMachinery.lineCount,
+      dominantLanguage: "typescript",
+    };
+    const findings = securityConsistency.detect(ctx as any);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === f.relativePath && d.evidence[0].line === 5),
+    ).toBe(true);
+  });
+
+  it("includes a Flask methods=['POST'] mutating route in the auth vote as a deviator; a bare @app.route (GET) is not flagged", () => {
+    // Deliberately NOT @login_required / @jwt_required here: those decorators
+    // also trip buildFileMiddlewareIndex's FILE-LEVEL Python auth regex
+    // (pyAuth), which would inherit hasAuth:true onto every route in the
+    // file, masking the very per-route gap this test targets. @requires_auth
+    // still matches the per-route perAuth regex (`@requires`) without
+    // matching the file-level one.
+    const pyRoutes = file(
+      "src/routes/orders.py",
+      [
+        `@app.post("/orders")`,
+        `@requires_auth`,
+        `def create_order():`,
+        `    return {}`,
+        ``,
+        `@app.post("/orders/<id>")`,
+        `@requires_auth`,
+        `def update_order():`,
+        `    return {}`,
+        ``,
+        `@app.post("/orders/<id>")`,
+        `@requires_auth`,
+        `def cancel_order():`,
+        `    return {}`,
+        ``,
+        `@app.post("/orders/<id>/ship")`,
+        `@requires_auth`,
+        `def ship_order():`,
+        `    return {}`,
+        ``,
+        `@app.route("/orders/danger", methods=["POST"])`,
+        `def danger():`,
+        `    return {}`,
+        ``,
+        `@app.route("/read")`,
+        `def read_only():`,
+        `    return {}`,
+      ].join("\n"),
+      "python",
+    );
+    const ctx = mkCtx([pyRoutes]);
+    const findings = securityConsistency.detect(ctx);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    // The unauthed methods=['POST'] route (line 21) is named as the deviator...
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 21),
+    ).toBe(true);
+    // ...and the bare, GET-only @app.route('/read') (line 25, no auth) is not:
+    // it never enters the mutating-route denominator at all.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.evidence[0].line === 25),
+    ).toBe(false);
+  });
+
+  // ── Adjacent-decorator regression: the methods= lookahead must never bleed
+  // into a neighboring route's decorator when routes sit immediately next to
+  // each other with one-line bodies (no blank line in between). ──
+  it("does not bleed an adjacent route's methods=[...] into an unauthed POST route's own classification", () => {
+    const pyRoutes = file(
+      "src/routes/orders.py",
+      [
+        `@app.post("/orders")`,
+        `@requires_auth`,
+        `def create_order(): return {}`,
+        `@app.post("/orders/<id>")`,
+        `@requires_auth`,
+        `def update_order(): return {}`,
+        `@app.post("/orders/<id>/cancel")`,
+        `@requires_auth`,
+        `def cancel_order(): return {}`,
+        `@app.post("/orders/<id>/ship")`,
+        `@requires_auth`,
+        `def ship_order(): return {}`,
+        `@app.post("/orders/danger")`,
+        `def danger(): return {}`,
+        `@app.route("/read", methods=["GET"])`,
+        `def read_only(): return {}`,
+      ].join("\n"),
+      "python",
+    );
+    const ctx = mkCtx([pyRoutes]);
+    const findings = securityConsistency.detect(ctx);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    // The unauthed POST route at line 13 must still be classified as
+    // mutating (POST from its own decorator), not as GET bled in from the
+    // immediately-adjacent /read route's methods=["GET"] on line 15.
+    expect(authFinding).toBeDefined();
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 13),
+    ).toBe(true);
+  });
+
+  it("does not bleed an adjacent route's methods=[...] into a bare GET route's own classification", () => {
+    // 7 authed POST routes keep the auth-vote ratio above the 75% dominance
+    // threshold even while both trailing routes (the misclassified /read
+    // under the old bug, and the genuinely-unauthed /danger) count against
+    // it, so the vote actually fires and the bug's false-positive on /read
+    // is observable, rather than the vote going silent.
+    const pyRoutes = file(
+      "src/routes/orders.py",
+      [
+        `@app.post("/orders/1")`,
+        `@requires_auth`,
+        `def r1(): return {}`,
+        `@app.post("/orders/2")`,
+        `@requires_auth`,
+        `def r2(): return {}`,
+        `@app.post("/orders/3")`,
+        `@requires_auth`,
+        `def r3(): return {}`,
+        `@app.post("/orders/4")`,
+        `@requires_auth`,
+        `def r4(): return {}`,
+        `@app.post("/orders/5")`,
+        `@requires_auth`,
+        `def r5(): return {}`,
+        `@app.post("/orders/6")`,
+        `@requires_auth`,
+        `def r6(): return {}`,
+        `@app.post("/orders/7")`,
+        `@requires_auth`,
+        `def r7(): return {}`,
+        `@app.route("/read")`,
+        `def read_only(): return {}`,
+        `@app.route("/danger", methods=["POST"])`,
+        `def danger(): return {}`,
+      ].join("\n"),
+      "python",
+    );
+    const ctx = mkCtx([pyRoutes]);
+    const findings = securityConsistency.detect(ctx);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    // The bare @app.route("/read") on line 22 defaults to GET and must never
+    // be reported as a missing-auth mutating route, even though the
+    // immediately-adjacent /danger route's methods=["POST"] on line 24 sits
+    // within the old 3-line lookahead window.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 22),
+    ).toBe(false);
+    // /danger (line 24) is a genuine unauthed mutating route and should
+    // still be correctly flagged.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 24),
+    ).toBe(true);
+  });
+
+  it("does not let an unbalanced literal paren in a route path bleed an adjacent route's methods=[...]", () => {
+    // A route path string can legitimately contain a "(". The decorator-arg
+    // scanner must skip parens inside string literals, otherwise the unbalanced
+    // "(" in "/weird(path" keeps the paren depth open and the scan leaks into
+    // the immediately-adjacent /danger route's methods=["POST"], misclassifying
+    // this bare GET route as a mutating route (a false positive).
+    const pyRoutes = file(
+      "src/routes/orders.py",
+      [
+        `@app.post("/orders/1")`,
+        `@requires_auth`,
+        `def r1(): return {}`,
+        `@app.post("/orders/2")`,
+        `@requires_auth`,
+        `def r2(): return {}`,
+        `@app.post("/orders/3")`,
+        `@requires_auth`,
+        `def r3(): return {}`,
+        `@app.post("/orders/4")`,
+        `@requires_auth`,
+        `def r4(): return {}`,
+        `@app.post("/orders/5")`,
+        `@requires_auth`,
+        `def r5(): return {}`,
+        `@app.post("/orders/6")`,
+        `@requires_auth`,
+        `def r6(): return {}`,
+        `@app.post("/orders/7")`,
+        `@requires_auth`,
+        `def r7(): return {}`,
+        `@app.route("/weird(path")`,
+        `def weird(): return {}`,
+        `@app.route("/danger", methods=["POST"])`,
+        `def danger(): return {}`,
+      ].join("\n"),
+      "python",
+    );
+    const ctx = mkCtx([pyRoutes]);
+    const findings = securityConsistency.detect(ctx);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    // The bare @app.route("/weird(path") on line 22 defaults to GET and must
+    // never be reported as a missing-auth mutating route, even though the
+    // unbalanced literal "(" would, without string skipping, leak the adjacent
+    // /danger route's methods=["POST"] into its classification.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 22),
+    ).toBe(false);
+    // /danger (line 24) is a genuine unauthed mutating route and stays flagged.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 24),
+    ).toBe(true);
   });
 });

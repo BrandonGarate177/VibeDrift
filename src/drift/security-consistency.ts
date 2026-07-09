@@ -34,10 +34,16 @@
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./types.js";
 import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
-import { extractJsRoutesAst, extractFileMiddlewareAst } from "./security-ast.js";
+import { extractJsRoutesAst, extractFileMiddlewareAst, SECURITY_AST } from "./security-ast.js";
 import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security-suppression.js";
 
-const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+// Canonical mutating set (upper-cased), shared with the in-loop classifier via
+// SECURITY_AST.MUTATING so batch and in-loop can never disagree. Includes ALL
+// (Express .all() handles every verb) so an unauthed .all() route is not
+// silently excluded from the auth vote.
+const MUTATION_METHODS = [...SECURITY_AST.MUTATING].map((m) => m.toUpperCase());
+// Body-bearing methods for the validation vote (DELETE usually has no body).
+const BODY_METHODS = ["POST", "PUT", "PATCH", "ALL"];
 
 // Does the codebase use auth machinery anywhere? If it does, a mutating route
 // with no auth is drift ("you know how to auth — this route forgot"), not an
@@ -247,6 +253,53 @@ function extractJsRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddlewa
   }
 }
 
+/** Text inside a Python route decorator's parentheses: from the first "(" on
+ *  line `start` to its matching ")", spanning continuation lines. Bounded by
+ *  paren depth so `methods=` is read from THIS decorator only and can never
+ *  bleed into an adjacent route's decorator. Parens inside string literals
+ *  (e.g. a route path like "/weird(path") are skipped, so an unbalanced literal
+ *  paren cannot throw off the depth count and leak into the next route. */
+function balancedDecoratorArgs(lines: string[], start: number): string {
+  let depth = 0;
+  let started = false;
+  let out = "";
+  let quote: string | null = null; // active string-literal quote char, or null
+  for (let j = start; j < lines.length; j++) {
+    const line = lines[j];
+    for (let k = 0; k < line.length; k++) {
+      const ch = line[k];
+      if (quote) {
+        // Inside a string literal: only a matching unescaped quote ends it;
+        // parens here are path/text, not structure.
+        if (ch === "\\") {
+          if (started) out += ch + (line[k + 1] ?? "");
+          k++; // skip the escaped char
+          continue;
+        }
+        if (ch === quote) quote = null;
+        if (started) out += ch;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        if (started) out += ch;
+        continue;
+      }
+      if (ch === "(") {
+        depth++;
+        started = true;
+      } else if (ch === ")") {
+        depth--;
+      }
+      if (started) out += ch;
+      if (started && depth === 0) return out;
+    }
+    out += " ";
+    if (j - start > 6) return out; // defensive cap for a malformed decorator
+  }
+  return out;
+}
+
 function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
   const lines = file.content.split("\n");
   const routePattern = /@\w+\.(?:route|get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/;
@@ -256,7 +309,22 @@ function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<s
     const match = lines[i].match(routePattern);
     if (!match) continue;
     const path = match[1];
-    const method = lines[i].match(/\.(get|post|put|patch|delete)/)?.[1]?.toUpperCase() ?? "ANY";
+    // Flask's @app.route defaults to GET when no methods= kwarg is present, NOT an
+    // unknown "ANY". Decorator-verb style (@app.post) resolves directly; the
+    // methods=[...] kwarg (Flask/others) is parsed so a mutating verb classifies
+    // the route as mutating. The kwarg is read from the route's own decorator
+    // via balanced paren scanning, so it can never bleed into an adjacent
+    // route's decorator even when routes sit right next to each other.
+    const decoratorVerb = lines[i].match(/\.(get|post|put|patch|delete)\s*\(/)?.[1]?.toUpperCase();
+    let method = decoratorVerb ?? "GET";
+    const decoratorArgs = balancedDecoratorArgs(lines, i);
+    const methodsKw = decoratorArgs.match(/methods\s*=\s*\[([^\]]*)\]/i);
+    if (methodsKw) {
+      const verbs = (methodsKw[1].match(/["'](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["']/gi) ?? [])
+        .map((v) => v.replace(/["']/g, "").toUpperCase());
+      const mutating = verbs.find((v) => MUTATION_METHODS.includes(v));
+      method = mutating ?? verbs[0] ?? method;
+    }
     const context = lines.slice(i, Math.min(lines.length, i + 30)).join("\n");
 
     const perAuth = /login_required|jwt_required|@requires|permission|token/.test(context);
@@ -404,7 +472,7 @@ export const securityConsistency: DriftDetector = {
     }
 
     for (const group of groups) {
-      const groupMutationRoutes = group.filter((r) => ["POST", "PUT", "PATCH"].includes(r.method));
+      const groupMutationRoutes = group.filter((r) => BODY_METHODS.includes(r.method));
       const valFinding = analyzeSecurityProperty(groupMutationRoutes, SECURITY_SUBCATEGORIES.validation, (r) => r.hasValidation, healthPaths);
       if (valFinding) findings.push(valFinding);
     }
