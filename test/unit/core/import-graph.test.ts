@@ -197,3 +197,269 @@ describe("parseImports — dynamic await import()", () => {
     expect(sources.size).toBe(0);
   });
 });
+
+describe("import-resolver — real path resolution", () => {
+  it("resolves relative .js import to .ts file (extension mapping)", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/utils/helpers.ts", "src/cli/scan.ts"]);
+
+    const result = resolveImportSource("../utils/helpers.js", "src/cli/scan.ts", index);
+    expect(result).toBe("src/utils/helpers.ts");
+  });
+
+  it("resolves extensionless import by trying .ts", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/core/types.ts", "src/cli/scan.ts"]);
+
+    const result = resolveImportSource("../core/types", "src/cli/scan.ts", index);
+    expect(result).toBe("src/core/types.ts");
+  });
+
+  it("resolves directory import to index.ts", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/analyzers/index.ts", "src/cli/scan.ts"]);
+
+    const result = resolveImportSource("../analyzers", "src/cli/scan.ts", index);
+    expect(result).toBe("src/analyzers/index.ts");
+  });
+
+  it("resolves @/ path alias to src/", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/lib/foo.ts"]);
+    const config = { pathAliases: { "@/*": "src/*" } };
+
+    const result = resolveImportSource("@/lib/foo", "src/cli/scan.ts", index, config);
+    expect(result).toBe("src/lib/foo.ts");
+  });
+
+  it("returns null for bare package imports", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/cli/scan.ts"]);
+
+    expect(resolveImportSource("react", "src/cli/scan.ts", index)).toBeNull();
+    expect(resolveImportSource("@supabase/supabase-js", "src/cli/scan.ts", index)).toBeNull();
+    expect(resolveImportSource("node:fs", "src/cli/scan.ts", index)).toBeNull();
+    expect(resolveImportSource("zod", "src/cli/scan.ts", index)).toBeNull();
+  });
+
+  it("returns null for relative imports that point to non-existent files", async () => {
+    const { buildFileIndex, resolveImportSource } = await import("../../../src/core/import-resolver.js");
+    const index = buildFileIndex(["src/cli/scan.ts", "src/core/types.ts"]);
+
+    expect(resolveImportSource("./nonexistent", "src/cli/scan.ts", index)).toBeNull();
+    expect(resolveImportSource("../missing/module.js", "src/cli/scan.ts", index)).toBeNull();
+  });
+
+  it("two files with the same basename in different directories do NOT collide", async () => {
+    const { buildImportGraph } = await import("../../../src/core/import-graph.js");
+
+    // Two files named "helpers.ts" in different directories
+    const utilsHelper = makeFile(
+      `export function formatDate() {}\n`,
+      "src/utils/helpers.ts",
+    );
+    const testHelper = makeFile(
+      `export function mockDb() {}\n`,
+      "test/helpers.ts",
+    );
+    // Only imports src/utils/helpers, NOT test/helpers
+    const consumer = makeFile(
+      `import { formatDate } from "../utils/helpers.js";\n`,
+      "src/cli/scan.ts",
+    );
+
+    const graph = buildImportGraph([utilsHelper, testHelper, consumer]);
+
+    // src/utils/helpers.ts should get 1 incoming (from scan.ts)
+    expect(graph.incomingCount.get("src/utils/helpers.ts")).toBe(1);
+    // test/helpers.ts should get 0 — the import resolves to src/utils, not test/
+    expect(graph.incomingCount.get("test/helpers.ts")).toBe(0);
+  });
+});
+
+describe("parseImportsAst — real tree-sitter parsing", () => {
+  it("extracts static imports from a parsed tree", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseImportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `import { foo, bar } from "./utils.js";\nimport type { Baz } from "./types.js";\nimport * as ns from "./namespace.js";\n`,
+      "src/test.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const { names, sources } = parseImportsAst(tree!);
+    expect(sources.has("./utils.js")).toBe(true);
+    expect(sources.has("./types.js")).toBe(true);
+    expect(sources.has("./namespace.js")).toBe(true);
+    expect(names.has("foo")).toBe(true);
+    expect(names.has("bar")).toBe(true);
+    expect(names.has("Baz")).toBe(true);
+    expect(names.has("ns")).toBe(true);
+  });
+
+  it("extracts dynamic imports nested inside functions", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseImportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `async function run() {\n  const { analyze } = await import("./analyzer.js");\n  const mod = await import("./module.js");\n}\n`,
+      "src/runner.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const { names, sources } = parseImportsAst(tree!);
+    expect(sources.has("./analyzer.js")).toBe(true);
+    expect(sources.has("./module.js")).toBe(true);
+    expect(names.has("analyze")).toBe(true);
+    expect(names.has("mod")).toBe(true);
+  });
+
+  it("extracts require() calls", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseImportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `const { readFile } = require("fs");\nfunction init() { const cfg = require("./config"); }\n`,
+      "src/legacy.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const { sources } = parseImportsAst(tree!);
+    expect(sources.has("fs")).toBe(true);
+    expect(sources.has("./config")).toBe(true);
+  });
+
+  it("extracts re-export sources", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseImportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `export { foo } from "./foo.js";\nexport * from "./all.js";\nexport * as utils from "./utils.js";\n`,
+      "src/barrel.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const { sources } = parseImportsAst(tree!);
+    expect(sources.has("./foo.js")).toBe(true);
+    expect(sources.has("./all.js")).toBe(true);
+    expect(sources.has("./utils.js")).toBe(true);
+  });
+});
+
+describe("parseExportsAst — real tree-sitter parsing", () => {
+  it("extracts named function and const exports", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseExportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `export function hello() {}\nexport const MY_CONST = 1;\nexport class MyClass {}\n`,
+      "src/mod.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const exports = parseExportsAst(tree!, "src/mod.ts");
+    const names = exports.map((e) => e.name);
+    expect(names).toContain("hello");
+    expect(names).toContain("MY_CONST");
+    expect(names).toContain("MyClass");
+    expect(exports.every((e) => !e.isDefault)).toBe(true);
+  });
+
+  it("extracts default exports", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseExportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `export default function main() {}\n`,
+      "src/entry.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const exports = parseExportsAst(tree!, "src/entry.ts");
+    expect(exports.length).toBe(1);
+    expect(exports[0].name).toBe("main");
+    expect(exports[0].isDefault).toBe(true);
+  });
+
+  it("extracts export clause (re-exports)", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseExportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `export { alpha, beta as b } from "./multi.js";\n`,
+      "src/barrel.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const exports = parseExportsAst(tree!, "src/barrel.ts");
+    const names = exports.map((e) => e.name);
+    expect(names).toContain("alpha");
+    expect(names).toContain("beta");
+  });
+
+  it("extracts export * as namespace", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseExportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `export * as util from "./y.js";\n`,
+      "src/ns.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const exports = parseExportsAst(tree!, "src/ns.ts");
+    const names = exports.map((e) => e.name);
+    expect(names).toContain("util");
+  });
+
+  it("does NOT produce names for bare export * (star re-export)", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { parseExportsAst } = await import("../../../src/core/import-graph-ast.js");
+
+    const file = makeFile(
+      `export * from "./everything.js";\n`,
+      "src/barrel.ts",
+    );
+    const tree = await parseFile(file);
+    expect(tree).not.toBeNull();
+
+    const exports = parseExportsAst(tree!, "src/barrel.ts");
+    // export * has no named export — it re-exports everything from the source
+    expect(exports.length).toBe(0);
+  });
+});
+
+describe("buildImportGraph — AST path (with file.tree)", () => {
+  it("uses AST parsing when tree is available", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+    const { buildImportGraph } = await import("../../../src/core/import-graph.js");
+
+    const consumer = makeFile(
+      `import { helper } from "./helper.js";\n`,
+      "src/main.ts",
+    );
+    const helperFile = makeFile(
+      `export function helper() {}\n`,
+      "src/helper.ts",
+    );
+
+    // Parse both files to get real trees
+    consumer.tree = (await parseFile(consumer)) ?? undefined;
+    helperFile.tree = (await parseFile(helperFile)) ?? undefined;
+    expect(consumer.tree).toBeDefined();
+    expect(helperFile.tree).toBeDefined();
+
+    const graph = buildImportGraph([consumer, helperFile]);
+    expect(graph.incomingCount.get("src/helper.ts")).toBe(1);
+    expect(graph.incomingCount.get("src/main.ts")).toBe(0);
+  });
+});
