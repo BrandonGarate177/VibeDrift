@@ -3,6 +3,7 @@ import { securityConsistency } from "../../../src/drift/security-consistency.js"
 import { runDriftDetection } from "../../../src/drift/index.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
+import { extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
 import {
   SECURITY_SUPPRESSION_SUBCATEGORY,
   SECURITY_SUPPRESSION_ANALYZER_ID,
@@ -759,5 +760,329 @@ describe("canonical mutating methods (Task B1)", () => {
     expect(
       authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 24),
     ).toBe(true);
+  });
+});
+
+// ── Task 4: Python AST extractor wired into both seams ──────────────────────
+//
+// Seam 1 (extractRoutes) and seam 2 (buildFileMiddlewareIndex) dispatch to the
+// AST extractor for clean-parsed python files, with the regex path retained as a
+// byte-identical fallback for tree-less / broken-parse python and for every
+// non-python file.
+describe("Python AST wiring (Task 4)", () => {
+  const pyTree = (p: string, c: string) => fileWithTree(p, c, "python");
+  const authFinding = (findings: any[]) => findings.find((f) => f.subCategory === "Auth middleware");
+
+  // ── Seam 1: dispatch selects AST vs regex ──
+  it("dispatch: a route-shaped COMMENT yields a route via the regex path but NOT via the AST path", async () => {
+    // 4 authed POST routes (per-route @requires_auth, which does NOT trip the
+    // file-level pyAuth regex) plus a route-shaped COMMENT for /danger. The
+    // regex extractor matches the comment (a live over-capture); the AST
+    // extractor sees only a comment node, no route.
+    const src =
+      `@app.post("/a")\n@requires_auth\ndef a(): return {}\n\n` +
+      `@app.post("/b")\n@requires_auth\ndef b(): return {}\n\n` +
+      `@app.post("/c")\n@requires_auth\ndef c(): return {}\n\n` +
+      `@app.post("/d")\n@requires_auth\ndef d(): return {}\n\n` +
+      `# @app.post("/danger")\n`;
+
+    // Tree-less (regex): the comment extracts an unauthed POST /danger, so the
+    // 4/5 auth vote fires and cites it.
+    const regexCtx = mkCtx([file("src/routes/orders.py", src, "python")]);
+    const regexFinding = authFinding(securityConsistency.detect(regexCtx));
+    expect(regexFinding).toBeDefined();
+    expect(regexFinding!.deviatingFiles.some((d: any) => d.detectedPattern.includes("/danger"))).toBe(true);
+
+    // With a clean tree (AST): the comment is not a route, so all 4 real routes
+    // are authed and no auth finding fires.
+    const astCtx = mkCtx([await pyTree("src/routes/orders.py", src)]);
+    expect(authFinding(securityConsistency.detect(astCtx))).toBeUndefined();
+  });
+
+  it("tree-less parity: a plain @app.route(methods=['POST']) file still yields its route via the regex fallback", () => {
+    const src =
+      `@app.post("/a")\n@requires_auth\ndef a(): return {}\n` +
+      `@app.post("/b")\n@requires_auth\ndef b(): return {}\n` +
+      `@app.post("/c")\n@requires_auth\ndef c(): return {}\n` +
+      `@app.post("/d")\n@requires_auth\ndef d(): return {}\n` +
+      `@app.route("/x", methods=["POST"])\ndef x(): return {}\n`;
+    // No tree -> the regex extractor runs and extracts the /x POST route, which
+    // is the lone unauthed deviator against 4 authed peers.
+    const findings = securityConsistency.detect(mkCtx([file("src/routes/orders.py", src, "python")]));
+    const f = authFinding(findings);
+    expect(f).toBeDefined();
+    expect(f!.deviatingFiles.some((d: any) => d.detectedPattern.includes("/x"))).toBe(true);
+  });
+
+  // ── Seam 2: file-level middleware index no longer over-blesses ──
+  it("file-middleware seam: a per-route @login_required no longer blesses the whole file (bare route is flagged)", async () => {
+    const lines: string[] = [];
+    for (const p of ["a", "b", "c", "d"]) {
+      lines.push(`@app.post("/${p}")`, `@login_required`, `def ${p}():`, `    return {}`, ``);
+    }
+    const dangerLine = lines.length + 1; // next pushed line is the /danger decorator
+    lines.push(`@app.post("/danger")`, `def danger():`, `    return {}`);
+    const api = await pyTree("src/routes/api.py", lines.join("\n"));
+    // Tree-less auth machinery file in a different directory (repo-global signal).
+    const mw = file("src/middleware/auth.ts", `export function requireAuth(req, res, next) { verifyToken(req); next(); }`);
+    const ctx = { files: [api, mw], totalLines: api.lineCount + mw.lineCount, dominantLanguage: "typescript" };
+
+    const findings = securityConsistency.detect(ctx as any);
+    const auth = findings.filter((f) => f.subCategory === "Auth middleware");
+    // Exactly one auth finding, and its sole deviator is the bare /danger route.
+    // Under the OLD regex file-index, @login_required marked the whole file
+    // authed and NO finding fired at all.
+    expect(auth).toHaveLength(1);
+    expect(auth[0].deviatingFiles).toHaveLength(1);
+    expect(auth[0].deviatingFiles[0].path).toBe("src/routes/api.py");
+    expect(auth[0].deviatingFiles[0].evidence[0].line).toBe(dangerLine);
+  });
+
+  // ── Inheritance precedence: receiver-scoped before_request ──
+  it("inheritance: a before_request auth hook blesses every route in its file (no auth finding among 4 hook-files)", async () => {
+    const hookFile = (p: string) =>
+      pyTree(`src/routes/${p}.py`,
+        `@app.before_request\ndef require_login():\n    return None\n\n` +
+        `@app.post("/${p}")\ndef ${p}():\n    return {}\n`);
+    const files = await Promise.all([hookFile("a"), hookFile("b"), hookFile("c"), hookFile("d")]);
+    const ctx = { files, totalLines: files.reduce((s, f) => s + f.lineCount, 0), dominantLanguage: "typescript" };
+    expect(authFinding(securityConsistency.detect(ctx as any))).toBeUndefined();
+  });
+
+  it("inheritance: a file with no hook stays unauthed and is flagged among hook-blessed peers", async () => {
+    const hookFile = (p: string) =>
+      pyTree(`src/routes/${p}.py`,
+        `@app.before_request\ndef require_login():\n    return None\n\n` +
+        `@app.post("/${p}")\ndef ${p}():\n    return {}\n`);
+    const authed = await Promise.all([hookFile("a"), hookFile("b"), hookFile("c"), hookFile("d")]);
+    const bare = await pyTree("src/routes/e.py", `@app.post("/e")\ndef e():\n    return {}\n`);
+    const files = [...authed, bare];
+    const ctx = { files, totalLines: files.reduce((s, f) => s + f.lineCount, 0), dominantLanguage: "typescript" };
+    const f = authFinding(securityConsistency.detect(ctx as any));
+    expect(f).toBeDefined();
+    // Only the no-hook e.py route deviates; the 4 hook-blessed peers do not.
+    expect(f!.deviatingFiles).toHaveLength(1);
+    expect(f!.deviatingFiles[0].path).toBe("src/routes/e.py");
+  });
+
+  // ── Mixed receivers end-to-end (the core never-false-bless case) ──
+  it("mixed receivers: an admin_bp before_request does not bless a co-located public_bp route end-to-end", async () => {
+    const mixed = await pyTree("src/routes/mixed.py",
+      `@admin_bp.before_request\n` +      // L1
+      `def require_login():\n` +          // L2
+      `    return None\n\n` +             // L3, L4
+      `@admin_bp.route("/users", methods=["POST"])\n` + // L5
+      `def create_user():\n` +           // L6
+      `    return {}\n\n` +               // L7, L8
+      `@public_bp.route("/webhook", methods=["POST"])\n` + // L9
+      `def webhook():\n` +                // L10
+      `    return {}\n`);                 // L11
+    const peer = (n: number) =>
+      pyTree(`src/routes/peer${n}.py`, `@app.post("/p${n}")\n@requires_auth\ndef p${n}():\n    return {}\n`);
+    const peers = await Promise.all([peer(1), peer(2), peer(3)]);
+    const files = [mixed, ...peers];
+    const ctx = { files, totalLines: files.reduce((s, f) => s + f.lineCount, 0), dominantLanguage: "typescript" };
+
+    const f = authFinding(securityConsistency.detect(ctx as any));
+    expect(f).toBeDefined();
+    // The public_bp webhook (L9) is the deviator; the admin_bp /users (L5) is
+    // NOT flagged. A file-granular OR would have blessed the webhook via the
+    // admin blueprint's hook and silenced both vote layers.
+    expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/mixed.py" && d.evidence[0].line === 9)).toBe(true);
+    expect(f!.deviatingFiles.some((d: any) => d.evidence[0].line === 5)).toBe(false);
+  });
+
+  // ── Cross-language regex noise can no longer bless a clean-parsed python file ──
+  it("cross-language noise: a docstring mentioning app.use(authMiddleware) never blesses a python route (seam 2)", async () => {
+    const orders = await pyTree("src/routes/orders.py",
+      `"""Mirrors the Node service: app.use(authMiddleware) runs first."""\n` + // L1
+      `@app.post("/orders")\n` +  // L2
+      `def create():\n` +          // L3
+      `    return {}\n`);          // L4
+    const peer = (p: string) =>
+      pyTree(`src/routes/${p}.py`, `@app.post("/${p}")\n@requires_auth\ndef ${p}():\n    return {}\n`);
+    const peers = await Promise.all([peer("a"), peer("b"), peer("c"), peer("d")]);
+    const files = [orders, ...peers];
+    const ctx = { files, totalLines: files.reduce((s, f) => s + f.lineCount, 0), dominantLanguage: "typescript" };
+
+    const f = authFinding(securityConsistency.detect(ctx as any));
+    expect(f).toBeDefined();
+    // The jsAuth regex matches "app.use(authMiddleware" in the docstring, but a
+    // python file with a clean tree forces the js/go arms false, so /orders
+    // stays unauthed and is the flagged deviator.
+    expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/orders.py" && d.evidence[0].line === 2)).toBe(true);
+  });
+
+  // ── healthPaths still excluded end-to-end ──
+  it("healthPaths: 7 authed POST routes + 1 unauthed POST /healthz produces zero auth findings", async () => {
+    const lines: string[] = [];
+    for (let i = 1; i <= 7; i++) {
+      lines.push(`@app.post("/r${i}")`, `@requires_auth`, `def r${i}():`, `    return {}`, ``);
+    }
+    lines.push(`@app.post("/healthz")`, `def health():`, `    return {}`);
+    const f = await pyTree("src/routes/api.py", lines.join("\n"));
+    const ctx = mkCtx([f]);
+    expect(authFinding(securityConsistency.detect(ctx))).toBeUndefined();
+  });
+
+  // ── Byte-identical guard: a python file cannot perturb JS-side findings ──
+  it("mixed-language: adding a python route file (different directory) does not change the JS-side findings", async () => {
+    const js = await fileWithTree("src/js/api.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+      `router.put("/items/:id", requireAuth, updateItem);\n` +
+      `router.patch("/items/:id", requireAuth, patchItem);\n` +
+      `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+      `router.post("/danger", wipeEverything);\n`);
+    const py = await fileWithTree("src/py/orders.py",
+      `@app.post("/o1")\n@requires_auth\ndef o1():\n    return {}\n\n` +
+      `@app.post("/o2")\n@requires_auth\ndef o2():\n    return {}\n`,
+      "python");
+
+    const withoutPy = securityConsistency.detect({ files: [js], totalLines: js.lineCount, dominantLanguage: "typescript" } as any);
+    const withPy = securityConsistency.detect({ files: [js, py], totalLines: js.lineCount + py.lineCount, dominantLanguage: "typescript" } as any);
+    // The python file is uniformly authed (no finding of its own) and lives in a
+    // different directory group, so the JS findings are byte-for-byte identical.
+    expect(withPy).toEqual(withoutPy);
+  });
+});
+
+// ── Task 6: detect-level fallback + suppression pins for the Python path ──────
+//
+// These exercise securityConsistency.detect end-to-end (not the extractor in
+// isolation), pinning two things: (1) a broken-parse python file still routes to
+// the regex extractor, preserving today's recall AND today's known regex over-
+// bless (the explicit scope boundary of the never-false-bless invariant); and
+// (2) the `# @vibedrift-public` annotation binds to a python route exactly as it
+// does for JS, using the `#` comment marker and the same own-line/preceding-line
+// rule.
+describe("Task 6: python detect-level fallback and suppression pins", () => {
+  const pyTree = (p: string, c: string) => fileWithTree(p, c, "python");
+  const auth = (findings: any[]) => findings.find((f) => f.subCategory === "Auth middleware");
+  const audit = (findings: any[]) => findings.find((f) => f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+  const ctxOf = (files: DriftFile[], extra: Record<string, unknown> = {}) => ({
+    files,
+    totalLines: files.reduce((s, f) => s + f.lineCount, 0),
+    dominantLanguage: "typescript",
+    ...extra,
+  });
+
+  it("an unclosed-paren file (rootNode.hasError) still yields its regex-visible route through detect", async () => {
+    // Unclosed decorator paren erases the file's decorator structure, so the AST
+    // extractor finds nothing on this tree — but detect's hasError gate routes the
+    // whole file to extractPythonRoutesRegex, which recovers the POST /danger
+    // route. Peers keep the auth vote alive so the recovered route is observable
+    // as the lone unauthed deviator.
+    const brokenSrc =
+      `@app.route("/broken"\n` +
+      `@app.post("/danger")\n` +
+      `def danger():\n` +
+      `    return {}\n`;
+    const broken = await pyTree("src/routes/broken.py", brokenSrc);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    // The AST path alone loses the route (proving the regex fallback is what
+    // preserves recall here, not the AST extractor).
+    expect(extractPythonRoutesAst(broken.tree!, broken.relativePath)).toEqual([]);
+
+    const peer = (n: number) =>
+      pyTree(`src/routes/p${n}.py`, `@app.post("/p${n}")\n@requires_auth\ndef p${n}():\n    return {}\n`);
+    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4)]);
+    const f = auth(securityConsistency.detect(ctxOf([broken, ...peers]) as any));
+    expect(f).toBeDefined();
+    expect(
+      f!.deviatingFiles.some(
+        (d: any) => d.path === "src/routes/broken.py" && d.detectedPattern.includes("/danger"),
+      ),
+    ).toBe(true);
+  });
+
+  it("pinned legacy: parse-error files keep the regex window over-bless", async () => {
+    // The recorded exception to never-false-bless: on a file with ANY parse error,
+    // detect falls back to the regex extractor, whose per-route auth check is a
+    // 30-line TEXT window. Here an unauthed POST /legacy route sits within that
+    // window of the bare word `token` in a comment, so the regex over-blesses it
+    // to hasAuth:true. This is the legacy behavior the AST path replaces on CLEAN
+    // files; on parse-error files it survives unchanged, by design. Pinned as a
+    // decision, not left silent.
+    const legacySrc =
+      `@app.route("/legacy", methods=["POST"])\n` + // L1: unauthed mutating route
+      `def legacy():\n` +                            // L2
+      `    # token validated upstream\n` +           // L3: bare word `token` in a comment, within the 30-line window
+      `    x = = 1\n` +                              // L4: parse error -> rootNode.hasError, routes file to regex
+      `    return {}\n`;                             // L5
+    const legacy = await pyTree("src/routes/legacy.py", legacySrc);
+    expect(legacy.tree!.rootNode.hasError).toBe(true);
+
+    // Group: the over-blessed /legacy + 3 authed peers + 1 genuine unauthed
+    // /danger. If the over-bless holds, /legacy counts as authed, the vote is
+    // 4 authed / 1 unauthed = 0.8 (fires), and /danger — NOT /legacy — is cited.
+    const peer = (n: number) =>
+      pyTree(`src/routes/lp${n}.py`, `@app.post("/lp${n}")\n@requires_auth\ndef lp${n}():\n    return {}\n`);
+    const peers = await Promise.all([peer(1), peer(2), peer(3)]);
+    const danger = await pyTree("src/routes/danger.py", `@app.post("/danger")\ndef danger():\n    return {}\n`);
+    const f = auth(securityConsistency.detect(ctxOf([legacy, ...peers, danger]) as any));
+
+    expect(f).toBeDefined();
+    // The genuine unauthed route is flagged...
+    expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/danger.py")).toBe(true);
+    // ...and /legacy is NOT flagged: the regex window over-blessed it via `token`,
+    // so it came out hasAuth:true (were it correctly unauthed, it would be cited
+    // here too — and the vote would have dropped to 3/5 = 0.6 and gone silent).
+    expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/legacy.py")).toBe(false);
+  });
+
+  it("suppresses a python route when # @vibedrift-public sits directly above its route decorator, and cites it", async () => {
+    // Four authed POST routes plus a fifth unauthed public route with a standalone
+    // `# @vibedrift-public` on the line immediately above its @app.post decorator.
+    const src = [
+      `@app.post("/a")`, `@requires_auth`, `def a():`, `    return {}`, ``,       // L1-5
+      `@app.post("/b")`, `@requires_auth`, `def b():`, `    return {}`, ``,       // L6-10
+      `@app.post("/c")`, `@requires_auth`, `def c():`, `    return {}`, ``,       // L11-15
+      `@app.post("/d")`, `@requires_auth`, `def d():`, `    return {}`, ``,       // L16-20
+      `# @vibedrift-public`,                                                       // L21
+      `@app.post("/public")`,                                                      // L22: route.line
+      `def public():`,                                                             // L23
+      `    return {}`,                                                             // L24
+    ].join("\n");
+    const f = await pyTree("src/routes/api.py", src);
+    const findings = securityConsistency.detect(ctxOf([f]) as any);
+
+    // /public is removed from the denominator, leaving 4/4 authed -> no auth drift.
+    expect(auth(findings)).toBeUndefined();
+    // The exclusion is cited on the route's own line (22), never silent.
+    const a = audit(findings);
+    expect(a).toBeDefined();
+    expect(a!.totalRelevantFiles).toBe(1);
+    expect(a!.deviatingFiles).toHaveLength(1);
+    expect(a!.deviatingFiles[0].path).toBe("src/routes/api.py");
+    expect(a!.deviatingFiles[0].evidence[0].line).toBe(22);
+  });
+
+  it("does NOT suppress when # @vibedrift-public sits above the FIRST decorator of a stack whose route decorator is lower", async () => {
+    // The annotation is 2 lines above route.line (a non-route decorator sits
+    // between them), so neither the own-line nor the preceding-line rule binds it.
+    // Under-matching is the documented safe direction: /public stays in the vote
+    // as the unauthed deviator, nothing is suppressed. This pins the python
+    // behavior as a decision, not an accident.
+    const src = [
+      `@app.post("/a")`, `@requires_auth`, `def a():`, `    return {}`, ``,       // L1-5
+      `@app.post("/b")`, `@requires_auth`, `def b():`, `    return {}`, ``,       // L6-10
+      `@app.post("/c")`, `@requires_auth`, `def c():`, `    return {}`, ``,       // L11-15
+      `@app.post("/d")`, `@requires_auth`, `def d():`, `    return {}`, ``,       // L16-20
+      `# @vibedrift-public`,                                                       // L21: annotation (2 lines above route.line)
+      `@log_calls`,                                                                // L22: first decorator of the stack
+      `@app.post("/public")`,                                                      // L23: route.line
+      `def public():`,                                                             // L24
+      `    return {}`,                                                             // L25
+    ].join("\n");
+    const f = await pyTree("src/routes/api.py", src);
+    const findings = securityConsistency.detect(ctxOf([f]) as any);
+
+    // Nothing suppressed -> no audit finding.
+    expect(audit(findings)).toBeUndefined();
+    // /public stays unauthed in the vote (4 authed + 1 unauthed = 0.8) and is
+    // cited on its own route-decorator line (23).
+    const a = auth(findings);
+    expect(a).toBeDefined();
+    expect(a!.deviatingFiles.some((d: any) => d.evidence[0].line === 23)).toBe(true);
   });
 });
