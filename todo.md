@@ -1,5 +1,33 @@
 # CLI backlog
 
+- **Hedge recommendation noun is Python-flavored for Go/mixed findings.** The
+  shared `hedgeRecommendationSuffix` (`src/drift/security-consistency.ts`) and
+  the terminal's read-back regex (`src/output/terminal.ts`, `before_request
+  hook (...)`) hardcode the Flask/FastAPI noun "before_request hook", which is
+  inaccurate for a Go middleware/handler hedge (e.g. `middleware.VerifyToken`).
+  Neutralizing it requires changing the producer and the terminal regex in
+  lockstep (a language-aware branch so Python stays byte-identical), which is
+  reserved for the user-facing honesty pass. Parked.
+
+- **No per-call logging in the MCP server (tool calls are invisible).** The stdio
+  server (`src/mcp/server.ts`) only writes startup (`vibedrift-mcp running on
+  stdio`), a one-time baseline-index line, and `Fatal:` to stderr — never a line
+  per tool call. So there is no way to watch which in-loop tools fire, when, or
+  with what outcome. Add an env-gated per-call stderr log (e.g.
+  `VIBEDRIFT_MCP_LOG=1`): tool name, repo, and a one-word result
+  (`fits` / `ok` / `no_baseline` / …). Because MCP clients capture server stderr
+  into their logs (Claude Code: `mcp-logs-<server>/*.jsonl`; also streamed by
+  `claude --debug`), this makes tool usage `tail -f`-able without touching the
+  JSON-RPC channel on stdout. Parked.
+
+- **No first-class "MCP is active / being used" signal.** After enabling the
+  server a user cannot tell it is doing anything: the tools are pull-based (they
+  fire only when the agent chooses to call them), `/mcp` shows "connected" but not
+  "used", and the `indexing … for the first time` line fires once per repo per
+  session, not per call. Consider a lightweight liveness/usage signal (pairs with
+  the per-call log above) so "connected" is distinguishable from "actually
+  invoked." Parked.
+
 - **Terminal hedge detection is a prose-regex.** The terminal decides a security
   finding is hedged by testing its recommendation text with `/Double check/`
   (`src/output/terminal.ts`), which is brittle copy coupling: a wording change to

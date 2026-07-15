@@ -1,14 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { securityConsistency } from "../../../src/drift/security-consistency.js";
-import { runDriftDetection } from "../../../src/drift/index.js";
+import { runDriftDetection, driftFindingToFinding } from "../../../src/drift/index.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 import { extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
 import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
+import { extractGoFileMiddlewareAst, extractGoRoutesAst } from "../../../src/drift/security-ast-go.js";
 import {
   SECURITY_SUPPRESSION_SUBCATEGORY,
   SECURITY_SUPPRESSION_ANALYZER_ID,
 } from "../../../src/drift/security-suppression.js";
+import { renderTerminalOutput } from "../../../src/output/terminal.js";
+import type { ScanResult, Finding } from "../../../src/core/types.js";
 
 function mkCtx(files: DriftFile[]): DriftContext {
   return {
@@ -1259,5 +1262,598 @@ describe("Task 4: hedged unsure-auth finding copy", () => {
     }
     // The ONLY difference is the deviator copy (and the appended recommendation).
     expect(hedged.deviatingFiles[0].detectedPattern).not.toBe(flat.deviatingFiles[0].detectedPattern);
+  });
+});
+
+// ── Task 4 (Go): regex fallback pins (pre-wiring) ────────────────────────────
+//
+// The byte-compat requirement has ZERO .go coverage today. These pins document
+// the EXACT behavior of the tree-less Go regex path (via the plain `file()`
+// helper, which carries no tree) and MUST stay green BOTH before AND after the
+// seam edits — a tree-less / broken-parse go file always routes to the regex
+// extractor, so these can never silently change. Legacy over-blesses are pinned
+// AS-IS (documented, not endorsed).
+describe("go regex fallback pins (pre-wiring)", () => {
+  const goFile = (p: string, c: string) => file(p, c, "go");
+  const authFinding = (fs: any[]) => fs.find((f) => f.subCategory === "Auth middleware");
+  const devPaths = (f: any): string[] =>
+    f ? f.deviatingFiles.map((d: any) => d.evidence[0].code.split(" ")[1]) : [];
+  // A tree-less authed peer: file-level r.Use(authMiddleware) blesses its POST
+  // through the regex file-middleware index.
+  const authedPeer = (n: number) =>
+    goFile(`src/routes/peer${n}.go`,
+      `func routes${n}(r *gin.Engine) {\n\tr.Use(authMiddleware)\n\tr.POST("/peer${n}", createX)\n}\n`);
+  // A tree-less, genuinely-unauthed mutating route.
+  const bareDanger = () =>
+    goFile("src/routes/danger.go", `func routes(r *gin.Engine) {\n\tr.POST("/danger", createX)\n}\n`);
+
+  it("recall: a tree-less go file's r.GET / r.POST routes extract through detect (regex recall)", () => {
+    // Target file: a bare (unauthed) POST /y among 4 authed peers -> /y is the
+    // lone deviator, proving the regex extractor recovered the POST route.
+    const target = goFile("src/routes/target.go",
+      `func routes(r *gin.Engine) {\n\tr.GET("/g", h)\n\tr.POST("/y", createX)\n}\n`);
+    const files = [target, authedPeer(1), authedPeer(2), authedPeer(3), authedPeer(4)];
+    const f = authFinding(securityConsistency.detect(mkCtx(files)));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/y");
+  });
+
+  it("pinned legacy: tree-less go files keep the regex window over-bless", () => {
+    // A bare word `authMiddleware` in a COMMENT within the 21-line window
+    // (i-10 .. i+10) of an unauthed POST /legacy over-blesses it to authed. This
+    // is the legacy behavior the AST path replaces on CLEAN files; on tree-less
+    // files it survives unchanged, by design. Pinned as a decision, not silent.
+    const legacy = goFile("src/routes/legacy.go",
+      `func routes(r *gin.Engine) {\n\t// authMiddleware runs upstream\n\tr.POST("/legacy", createX)\n}\n`);
+    // 3 authed peers + the over-blessed /legacy (= 4 authed) + 1 genuine unauthed
+    // /danger -> 4/5 = 0.8 fires and cites /danger. If /legacy were NOT
+    // over-blessed it would be cited too and the vote would drop to 3/5 = 0.6
+    // (silent), so the finding firing on /danger alone proves the over-bless.
+    const files = [legacy, authedPeer(1), authedPeer(2), authedPeer(3), bareDanger()];
+    const f = authFinding(securityConsistency.detect(mkCtx(files)));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/danger");
+    expect(devPaths(f)).not.toContain("/legacy");
+  });
+
+  it("file index: a tree-less r.Use(authMiddleware) blesses a distant same-file route", () => {
+    // The Use sits >10 lines above the route, so the per-route TEXT window cannot
+    // reach it; only the file-level middleware index (which matches `.Use(auth`
+    // anywhere in the file) can bless /scoped. Observed via /scoped NOT being the
+    // deviator among peers where a genuine unauthed /danger is.
+    const scoped = goFile("src/routes/scoped.go",
+      [
+        `func setup(r *gin.Engine) {`,   // L1
+        `\tr.Use(authMiddleware)`,        // L2 (0-based row 1)
+        `}`,                              // L3
+        ``, ``, ``, ``, ``, ``, ``, ``, ``, ``, ``, ``, // L4-15 padding
+        `func routes(r *gin.Engine) {`,  // L16
+        `\tr.POST("/scoped", createX)`,   // L17 (0-based row 16; window rows 6..26 excludes row 1)
+        `}`,                              // L18
+      ].join("\n"));
+    const files = [scoped, authedPeer(1), authedPeer(2), authedPeer(3), bareDanger()];
+    const f = authFinding(securityConsistency.detect(mkCtx(files)));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/danger");
+    expect(devPaths(f)).not.toContain("/scoped"); // file-index blessed it
+  });
+
+  it("known miss: chi lowercase r.Post in a tree-less go file is NOT extracted by the regex", () => {
+    // The echo regex pattern is UPPERCASE-verb only, so chi's `r.Post(...)` is a
+    // recall miss. 4 authed peers + 1 genuine unauthed /danger fire a 4/5 = 0.8
+    // finding; the chi file's would-be unauthed /chi, if it extracted, would drop
+    // the vote to 4/6 = 0.67 (silent). The finding firing on /danger AND /chi
+    // never appearing pins the miss (baseline for the AST recall delta).
+    const chi = goFile("src/routes/chi.go", `func routes(r chi.Router) {\n\tr.Post("/chi", createX)\n}\n`);
+    const files = [chi, authedPeer(1), authedPeer(2), authedPeer(3), authedPeer(4), bareDanger()];
+    const f = authFinding(securityConsistency.detect(mkCtx(files)));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/danger");
+    expect(devPaths(f)).not.toContain("/chi");
+  });
+});
+
+// ── Task 4 (Go): AST extractor wired into both seams ─────────────────────────
+//
+// Seam 1 (extractRoutes) and seam 2 (buildFileMiddlewareIndex) dispatch to the
+// Go AST extractor for clean-parsed go files, with the regex path retained as a
+// byte-identical fallback for tree-less / broken-parse go and every non-go file.
+describe("Go AST wiring (Task 4)", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const authFinding = (fs: any[]) => fs.find((f) => f.subCategory === "Auth middleware");
+  const devPaths = (f: any): string[] =>
+    f ? f.deviatingFiles.map((d: any) => d.evidence[0].code.split(" ")[1]) : [];
+  // An in-file factory whose inner body verifiably rejects -> rule 2 bless (NOT a
+  // name bless). r.Use(AuthMiddleware()) blesses that scope's routes.
+  const goAuthFactory =
+    `func AuthMiddleware() gin.HandlerFunc { return func(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() } }\n`;
+  const goPeer = (dir: string, n: number) =>
+    goTree(`${dir}/peer${n}.go`,
+      goAuthFactory + `func routes${n}(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.POST("/peer${n}", createX)\n}\n`);
+
+  it("dispatch pair: a two-line Gorilla chain resolves POST via the AST but is missed by the tree-less regex", async () => {
+    // gorillaPattern requires HandleFunc + .Methods on the SAME line; a chain
+    // split across two lines defeats the regex but not the AST chain walk.
+    const gorillaSrc = `func routes(r *mux.Router) {\n\tr.HandleFunc("/danger", h).\n\t\tMethods("POST")\n}\n`;
+    const peers = await Promise.all([goPeer("src/gorilla", 1), goPeer("src/gorilla", 2), goPeer("src/gorilla", 3), goPeer("src/gorilla", 4)]);
+    // WITH a tree: the AST walks the cross-line chain and extracts POST /danger,
+    // the lone unauthed deviator (4/5 = 0.8 fires).
+    const withTree = await goTree("src/gorilla/g.go", gorillaSrc);
+    expect(withTree.tree!.rootNode.hasError).toBe(false);
+    const fWith = authFinding(securityConsistency.detect(mkCtx([...peers, withTree])));
+    expect(fWith).toBeDefined();
+    expect(devPaths(fWith)).toContain("/danger");
+    // TREE-LESS: the gorilla regex is same-line only, so /danger is never
+    // extracted; the peers are uniformly authed and nothing is flagged.
+    const treeless = file("src/gorilla/g.go", gorillaSrc, "go");
+    const fLess = authFinding(securityConsistency.detect(mkCtx([...peers, treeless])));
+    expect(devPaths(fLess)).not.toContain("/danger");
+  });
+
+  it("pinned legacy: parse-error go files keep the regex window over-bless", async () => {
+    // A go file with a parse error routes WHOLE to the regex extractor, which
+    // recovers the regex-visible /legacy route AND keeps the 21-line window
+    // over-bless (comment `authMiddleware`). On a CLEAN tree the AST would flag
+    // /legacy; on a broken tree it survives blessed, by design.
+    const brokenSrc =
+      `func routes(r *gin.Engine) {\n` +
+      `\t// authMiddleware runs upstream\n` +
+      `\tr.POST("/legacy", createX)\n` +
+      `\tx := = 1\n` +                       // parse error -> rootNode.hasError
+      `}\n`;
+    const broken = await goTree("src/broken/legacy.go", brokenSrc);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    const peers = await Promise.all([goPeer("src/broken", 1), goPeer("src/broken", 2), goPeer("src/broken", 3)]);
+    const danger = goTree("src/broken/danger.go", `func routes(r *gin.Engine) {\n\tr.POST("/danger", createX)\n}\n`);
+    const files = [broken, ...peers, await danger];
+    const f = authFinding(securityConsistency.detect(mkCtx(files)));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/danger");
+    expect(devPaths(f)).not.toContain("/legacy"); // regex window over-blessed it
+  });
+
+  it("cross-language noise (go direction): a comment app.use / string before_request never blesses a clean go route", async () => {
+    const noisy = await goTree("src/noise/orders.go",
+      `// Mirrors the Node service: app.use(authMiddleware) runs first\n` +
+      `func routes(r *gin.Engine) {\n` +
+      `\tmsg := "@app.before_request"\n` +
+      `\tr.POST("/orders", createX)\n` +
+      `}\n`);
+    expect(noisy.tree!.rootNode.hasError).toBe(false);
+    const peers = await Promise.all([goPeer("src/noise", 1), goPeer("src/noise", 2), goPeer("src/noise", 3), goPeer("src/noise", 4)]);
+    const f = authFinding(securityConsistency.detect(mkCtx([noisy, ...peers])));
+    expect(f).toBeDefined();
+    // The case-insensitive jsAuth regex matches `app.use(authMiddleware` in the
+    // comment and pyAuth matches `@app.before_request`, but a clean go tree forces
+    // both arms false, so /orders stays unauthed and is the flagged deviator.
+    expect(devPaths(f)).toContain("/orders");
+  });
+
+  it("file-middleware seam end-to-end: 4 body-backed r.Use files + 1 bare route -> one finding on the bare route", async () => {
+    const peers = await Promise.all([goPeer("src/api", 1), goPeer("src/api", 2), goPeer("src/api", 3), goPeer("src/api", 4)]);
+    const bare = await goTree("src/api/danger.go", `func routes(r *gin.Engine) {\n\tr.POST("/danger", createX)\n}\n`);
+    const findings = securityConsistency.detect(mkCtx([...peers, bare]));
+    const auths = findings.filter((f) => f.subCategory === "Auth middleware");
+    expect(auths).toHaveLength(1);
+    expect(auths[0].deviatingFiles).toHaveLength(1);
+    expect(auths[0].deviatingFiles[0].path).toBe("src/api/danger.go");
+    expect(auths[0].deviatingFiles[0].evidence[0].line).toBe(2); // the r.POST line
+  });
+
+  it("unsure survives the dispatch: the deviator's detectedPattern is the hedged shape", async () => {
+    const peers = await Promise.all([goPeer("src/hedge", 1), goPeer("src/hedge", 2), goPeer("src/hedge", 3), goPeer("src/hedge", 4)]);
+    const unsure = await goTree("src/hedge/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    const findings = securityConsistency.detect(mkCtx([...peers, unsure]));
+    const auths = findings.filter((f) => f.subCategory === "Auth middleware");
+    expect(auths).toHaveLength(1);
+    expect(auths[0].deviatingFiles).toHaveLength(1);
+    const dev = auths[0].deviatingFiles[0].detectedPattern;
+    expect(dev).toContain("double check");
+    expect(dev).toContain("middleware.VerifyToken");
+  });
+
+  it("mixed-language byte-identity: adding a clean go route file (different dir) does not change JS-side findings", async () => {
+    const js = await fileWithTree("src/js/api.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+      `router.put("/items/:id", requireAuth, updateItem);\n` +
+      `router.patch("/items/:id", requireAuth, patchItem);\n` +
+      `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+      `router.post("/danger", wipeEverything);\n`);
+    const gof = await goTree("src/go/orders.go",
+      goAuthFactory + `func routes(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.POST("/o1", createX)\n\tr.POST("/o2", createY)\n}\n`);
+    const withoutGo = securityConsistency.detect({ files: [js], totalLines: js.lineCount, dominantLanguage: "typescript" } as any);
+    const withGo = securityConsistency.detect({ files: [js, gof], totalLines: js.lineCount + gof.lineCount, dominantLanguage: "typescript" } as any);
+    expect(withGo).toEqual(withoutGo);
+  });
+});
+
+// ── Task 5 (Go): the shipped hedge reused end-to-end, zero parallel code ─────
+//
+// Tasks 3-4 gave Go routes `authUnsureHook`; the hedge mechanism itself
+// (hedgedDeviatorPattern, hedgeRecommendationSuffix, and the terminal's
+// isHedgedAuthFinding/hedgedSecurityConsequence) is language-neutral and was
+// shipped for Python (#43). This block proves a Go-sourced unsure route flows
+// through the SAME mechanism with no Go-specific branch anywhere in the
+// pipeline, up to and including the terminal renderer.
+describe("Task 5 (Go): unsure-hook hedge reuses the shipped Python mechanism", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const authFinding = (fs: any[]) => fs.find((f: any) => f.subCategory === "Auth middleware");
+  // In-file factory whose inner body verifiably rejects (rule 2 bless, not a
+  // name bless) — same fixture shape as Task 4's Go wiring tests.
+  const goAuthFactory =
+    `func AuthMiddleware() gin.HandlerFunc { return func(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() } }\n`;
+  const goPeer = (dir: string, n: number) =>
+    goTree(`${dir}/peer${n}.go`,
+      goAuthFactory + `func routes${n}(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.POST("/peer${n}", createX)\n}\n`);
+
+  it("dominance vote: a Go unsure Use hook renders the byte-for-byte hedged deviator, and the recommendation names it", async () => {
+    const peers = await Promise.all([goPeer("src/t5dom", 1), goPeer("src/t5dom", 2), goPeer("src/t5dom", 3), goPeer("src/t5dom", 4)]);
+    const unsure = await goTree("src/t5dom/orders.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/orders", createOrder)\n}\n`);
+    const findings = securityConsistency.detect(mkCtx([...peers, unsure]));
+
+    expect(findings.filter((f: any) => f.subCategory === "Auth middleware")).toHaveLength(1);
+    const a = authFinding(findings)!;
+    expect(a.deviatingFiles).toHaveLength(1);
+    // Byte-for-byte hedgedDeviatorPattern — the same function Python's hedge uses.
+    expect(a.deviatingFiles[0].detectedPattern).toBe(
+      "POST /orders: auth not confirmed, double check hook 'middleware.VerifyToken'",
+    );
+    expect(a.deviatingFiles[0].detectedPattern).not.toMatch(/—|--/);
+    expect(a.recommendation).toContain("Double check");
+    expect(a.recommendation).toContain("middleware.VerifyToken");
+  });
+
+  it("confident Go sibling: a plainly-unauthed route (no Use hook at all) keeps today's exact flat deviator", async () => {
+    const peers = await Promise.all([goPeer("src/t5domflat", 1), goPeer("src/t5domflat", 2), goPeer("src/t5domflat", 3), goPeer("src/t5domflat", 4)]);
+    const bare = await goTree("src/t5domflat/orders.go", `func routes(r *gin.Engine) {\n\tr.POST("/orders", createOrder)\n}\n`);
+    const a = authFinding(securityConsistency.detect(mkCtx([...peers, bare])))!;
+    expect(a.deviatingFiles[0].detectedPattern).toBe("POST /orders — no Auth middleware");
+    expect(a.recommendation).not.toMatch(/double check/i);
+    expect(a.recommendation).not.toContain("middleware.VerifyToken");
+  });
+
+  it("uniform-auth-gap (Go): the unsure route among uniformly-unauthed mutating routes hedges; peers keep the flat '— no auth' string; counts/severity/confidence unchanged", async () => {
+    const flat = (n: number) =>
+      goTree(`src/t5gap/f${n}.go`, `func routes${n}(r *gin.Engine) {\n\tr.POST("/f${n}", createX)\n}\n`);
+    const flats = await Promise.all([flat(1), flat(2), flat(3)]);
+    const unsure = await goTree("src/t5gap/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    // Baseline evidence so analyzeUniformAuthGap doesn't stay silent: the repo
+    // knows how to auth elsewhere (matches the repoHasAuthMachinery symbol list).
+    const machinery = await goTree("src/t5gap/lib/auth.go", `func AuthMiddleware() {}\n`);
+    const a = authFinding(securityConsistency.detect(mkCtx([...flats, unsure, machinery])))!;
+
+    expect(a.finding).toBe("4 mutating route(s) lack auth while the codebase uses auth elsewhere");
+    expect(a.confidence).toBe(0.6);
+    expect(a.severity).toBe("error");
+    const byPath = new Map(a.deviatingFiles.map((d: any) => [d.path, d.detectedPattern]));
+    expect(byPath.get("src/t5gap/x.go")).toBe(
+      "POST /x: auth not confirmed, double check hook 'middleware.VerifyToken'",
+    );
+    expect(byPath.get("src/t5gap/f1.go")).toBe("POST /f1 — no auth");
+    expect(byPath.get("src/t5gap/f2.go")).toBe("POST /f2 — no auth");
+    expect(byPath.get("src/t5gap/f3.go")).toBe("POST /f3 — no auth");
+    expect(a.recommendation).toContain("Double check");
+    expect(a.recommendation).toContain("middleware.VerifyToken");
+  });
+
+  it("no cross-property leakage (Go): validation and rate-limit findings never carry the auth hedge for a route that also lacks them", async () => {
+    const peer = (n: number) =>
+      goTree(`src/t5leak/p${n}.go`,
+        goAuthFactory +
+        `func routes${n}(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.Use(middleware.RateLimiter(rate))\n\tr.Use(RequestValidator())\n\tr.POST("/p${n}", createX)\n}\n`);
+    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4)]);
+    const unsure = await goTree("src/t5leak/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    const findings = securityConsistency.detect(mkCtx([...peers, unsure]));
+
+    const val = findings.find((f: any) => f.subCategory === "Input validation");
+    const rate = findings.find((f: any) => f.subCategory === "Rate limiting");
+    expect(val).toBeDefined();
+    expect(rate).toBeDefined();
+    for (const f of [val!, rate!]) {
+      for (const d of (f as any).deviatingFiles) {
+        expect(d.detectedPattern).not.toMatch(/double check/i);
+        expect(d.detectedPattern).not.toContain("middleware.VerifyToken");
+      }
+      expect((f as any).recommendation).not.toMatch(/double check/i);
+      expect((f as any).recommendation).not.toContain("middleware.VerifyToken");
+    }
+    // Sanity: the auth finding IS hedged in the same run — this proves the gate
+    // at `propertyName === SECURITY_SUBCATEGORIES.auth` is doing the excluding,
+    // not an accidental absence of the hook name anywhere in this corpus.
+    expect(authFinding(findings)!.deviatingFiles[0].detectedPattern).toContain(
+      "double check hook 'middleware.VerifyToken'",
+    );
+  });
+
+  it("vote-arithmetic invariance (Go): hedging changes COPY only, never dominantCount/total/consistency/severity/confidence", async () => {
+    const hedgedPeers = await Promise.all([goPeer("src/t5inv", 1), goPeer("src/t5inv", 2), goPeer("src/t5inv", 3), goPeer("src/t5inv", 4)]);
+    const unsure = await goTree("src/t5inv/orders.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/orders", createOrder)\n}\n`);
+    const hedged = authFinding(securityConsistency.detect(mkCtx([...hedgedPeers, unsure])))!;
+
+    // Control: same corpus, unsure Use line deleted so /orders reads confidently
+    // unauthed instead of unsure.
+    const ctrlPeers = await Promise.all([goPeer("src/t5invctrl", 1), goPeer("src/t5invctrl", 2), goPeer("src/t5invctrl", 3), goPeer("src/t5invctrl", 4)]);
+    const ctrl = await goTree("src/t5invctrl/orders.go", `func routes(r *gin.Engine) {\n\tr.POST("/orders", createOrder)\n}\n`);
+    const flatFinding = authFinding(securityConsistency.detect(mkCtx([...ctrlPeers, ctrl])))!;
+
+    for (const k of ["dominantCount", "totalRelevantFiles", "consistencyScore", "severity", "confidence"] as const) {
+      expect((hedged as any)[k]).toBe((flatFinding as any)[k]);
+    }
+    expect(hedged.deviatingFiles[0].detectedPattern).not.toBe(flatFinding.deviatingFiles[0].detectedPattern);
+  });
+
+  it("FileMiddleware honesty (Go, detect boundary): an unsure-only Use hook never sets file-level hasAuth", async () => {
+    const unsure = await goTree("src/t5honesty/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    expect(unsure.tree!.rootNode.hasError).toBe(false);
+    const mw = extractGoFileMiddlewareAst(unsure.tree!);
+    expect(mw.hasAuth).toBe(false);
+  });
+});
+
+// ── Task 5 (Go): terminal hedge visibility ────────────────────────────────
+//
+// terminal.ts is the one render surface that hardcodes a confident consequence
+// ("Unprotected routes may be exposed in production") instead of passing
+// `recommendation`/`detectedPattern` straight through (#43 gated it on
+// isHedgedAuthFinding). html/csv/docx/json/fix-prompt never special-case the
+// hedge — they render `recommendation`/`detectedPattern` verbatim regardless of
+// source language, so a Go-sourced hedge already reaches them with no code
+// change (verified by inspection: none of those renderers branch on the hedge
+// or on language). Only terminal.ts needs an end-to-end pin.
+describe("Task 5 (Go): terminal hedge visibility", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const goAuthFactory =
+    `func AuthMiddleware() gin.HandlerFunc { return func(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() } }\n`;
+  const goPeer = (dir: string, n: number) =>
+    goTree(`${dir}/peer${n}.go`,
+      goAuthFactory + `func routes${n}(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.POST("/peer${n}", createX)\n}\n`);
+
+  // The real pipeline computes `consistencyImpact` in the scoring engine, one
+  // stage past driftFindingToFinding (src/scoring/engine.ts), which is out of
+  // scope here. Mirror the shipped Python terminal-hedge test: give each
+  // finding a fixed consistencyImpact so it clears the Fix Plan's meaningful-
+  // impact floor, the same way `terminal-hedge.test.ts` does. Everything else
+  // (recommendation, detectedPattern) is the REAL Go extractor's output.
+  const toFinding = (d: any): Finding => ({
+    ...driftFindingToFinding(d),
+    consistencyImpact: 5,
+  });
+
+  const emptyCat = { score: 20, maxScore: 20, locked: false, findingCount: 0, applicable: true };
+  function scanResultOf(findings: Finding[]): ScanResult {
+    return {
+      context: {
+        rootDir: "/tmp/proj",
+        dominantLanguage: "go",
+        languageBreakdown: new Map(),
+        totalLines: 500,
+        files: [],
+        intentHints: [],
+      },
+      compositeScore: 82,
+      maxCompositeScore: 100,
+      percentile: null,
+      peerLanguage: "go",
+      scores: {
+        architecturalConsistency: { ...emptyCat, applicable: false },
+        redundancy: { ...emptyCat, applicable: false },
+        dependencyHealth: { ...emptyCat, applicable: false },
+        securityPosture: { ...emptyCat },
+        intentClarity: { ...emptyCat, applicable: false },
+      },
+      hygieneScore: 0,
+      maxHygieneScore: 0,
+      hygieneScores: {},
+      findings,
+      driftFindings: [],
+      driftScores: {},
+      perFileScores: new Map(),
+      teaseMessages: [],
+      deepInsights: [],
+      scanTimeMs: 5,
+    } as unknown as ScanResult;
+  }
+
+  it("hedged Go finding: terminal does not show the flat confident consequence and surfaces the hook name plus 'double check'", async () => {
+    const peers = await Promise.all([goPeer("src/t5term", 1), goPeer("src/t5term", 2), goPeer("src/t5term", 3), goPeer("src/t5term", 4)]);
+    const unsure = await goTree("src/t5term/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    const driftFindings = securityConsistency.detect(mkCtx([...peers, unsure]));
+    const out = renderTerminalOutput(scanResultOf(driftFindings.map(toFinding)));
+
+    expect(out).not.toContain("Unprotected routes may be exposed in production");
+    expect(out).toContain("middleware.VerifyToken");
+    expect(out.toLowerCase()).toContain("double check");
+  });
+
+  it("confident Go sibling finding: terminal keeps the flat consequence and shows no hedge", async () => {
+    const peers = await Promise.all([goPeer("src/t5term2", 1), goPeer("src/t5term2", 2), goPeer("src/t5term2", 3), goPeer("src/t5term2", 4)]);
+    const bare = await goTree("src/t5term2/x.go", `func routes(r *gin.Engine) {\n\tr.POST("/x", createX)\n}\n`);
+    const driftFindings = securityConsistency.detect(mkCtx([...peers, bare]));
+    const out = renderTerminalOutput(scanResultOf(driftFindings.map(toFinding)));
+
+    expect(out).toContain("Unprotected routes may be exposed in production");
+    expect(out.toLowerCase()).not.toContain("double check");
+    expect(out).not.toContain("middleware.VerifyToken");
+  });
+});
+
+// ── Task 6 (Go): adversarial detect-level fallback ────────────────────────────
+//
+// Companions to the direct-extractor pins in security-ast-go.test.ts
+// ("malformed and adversarial input"): here the SAME hazards are run through
+// securityConsistency.detect end-to-end, proving the whole-file hasError gate
+// preserves recall via the regex fallback exactly as it does for JS/Python.
+describe("Task 6 (Go): adversarial detect-level fallback", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const authFinding = (fs: any[]) => fs.find((f: any) => f.subCategory === "Auth middleware");
+  const devPaths = (f: any): string[] =>
+    f ? f.deviatingFiles.map((d: any) => d.evidence[0].code.split(" ")[1]) : [];
+  const authedPeer = (dir: string, n: number) =>
+    goTree(`${dir}/peer${n}.go`, `func routes${n}(r *gin.Engine) {\n\tr.Use(authMiddleware)\n\tr.POST("/peer${n}", createX)\n}\n`);
+
+  it("swallowed-route hazard: the whole file (rootNode.hasError) still routes to regex and recovers the swallowed route's recall", async () => {
+    // The direct extractor emits NOTHING from this file (pinned in
+    // security-ast-go.test.ts). Here the mutating verb is POST rather than the
+    // brief's illustrative GET: GET is structurally outside every
+    // security-consistency auth vote (MUTATION_METHODS-gated), so a GET would
+    // never surface as an observable deviator regardless of recall — this swap
+    // is required to make recall OBSERVABLE end-to-end, not a change to the
+    // hazard itself (same unclosed-paren-swallows-the-next-call shape).
+    const broken = await goTree("src/swallow/danger.go",
+      `package main\n\n` + `func routes() {\n\tr.POST("/broken", mw, h\n\tr.POST("/later", h)\n}\n`);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    expect(extractGoRoutesAst(broken.tree!, broken.relativePath)).toEqual([]);
+
+    const peers = await Promise.all([
+      authedPeer("src/swallow", 1), authedPeer("src/swallow", 2),
+      authedPeer("src/swallow", 3), authedPeer("src/swallow", 4),
+    ]);
+    const f = authFinding(securityConsistency.detect(mkCtx([broken, ...peers])));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/later");
+  });
+
+  it("surgical-per-node-skip parity: a file-level parse error elsewhere still routes the WHOLE file to regex (python bodyerror parity)", async () => {
+    // The direct extractor's surgical per-node skip emits POST /good from this
+    // exact source (pinned in security-ast-go.test.ts) — but detect's dispatch
+    // gate is coarser than that per-node precision: ANY hasError anywhere in the
+    // file routes the WHOLE file to the regex fallback, never reaching the AST
+    // extractor's surgical logic at all. /good still recovers, just via a
+    // completely different mechanism (regex line-window), which this pins.
+    const broken = await goTree("src/surgical/mix.go",
+      `package main\n\n` + `func bad() {\n\tx := := 1\n\t_ = x\n}\n\nfunc good() {\n\tr.POST("/good", h)\n}\n`);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    expect(extractGoRoutesAst(broken.tree!, broken.relativePath).map((r) => `${r.method} ${r.path}`))
+      .toEqual(["POST /good"]); // the direct-extractor pin, re-asserted here for contrast
+
+    const peers = await Promise.all([
+      authedPeer("src/surgical", 1), authedPeer("src/surgical", 2),
+      authedPeer("src/surgical", 3), authedPeer("src/surgical", 4),
+    ]);
+    const f = authFinding(securityConsistency.detect(mkCtx([broken, ...peers])));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/good");
+  });
+});
+
+// ── Task 6 (Go): suppression pins ──────────────────────────────────────────────
+//
+// The `@vibedrift-public` annotation mechanism (security-suppression.ts) is
+// language-generic: it keys off `route.line` (the anchor call's OWN row) and AST
+// comment nodes when a tree is attached. These pins prove it binds correctly for
+// Go, including the Task 2 line-choice decision (a Gorilla chain's route.line is
+// the HandleFunc row, never a chained `.Methods(...)` continuation's row).
+describe("Task 6 (Go): suppression pins", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const auth = (fs: any[]) => fs.find((f: any) => f.subCategory === "Auth middleware");
+  const audit = (fs: any[]) => fs.find((f: any) => f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+  const requireAuthDef =
+    `func requireAuth(c *gin.Context) {\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t\treturn\n\t}\n\tc.Next()\n}\n`;
+  const authedFour = [
+    `\tr.POST("/a", requireAuth, ha)`,
+    `\tr.POST("/b", requireAuth, hb)`,
+    `\tr.POST("/c", requireAuth, hc)`,
+    `\tr.POST("/d", requireAuth, hd)`,
+  ];
+
+  it("// @vibedrift-public on the route's OWN line suppresses it; the audit finding cites that line", async () => {
+    const src = [
+      `package main`, ``,
+      ...requireAuthDef.split("\n").slice(0, -1),
+      ``,
+      `func routes(r *gin.Engine) {`,
+      ...authedFour,
+      `\tr.POST("/public", handlePublic) // @vibedrift-public`,
+      `}`,
+    ].join("\n");
+    const f = await goTree("src/suppress/api.go", src);
+    const findings = securityConsistency.detect(mkCtx([f]));
+
+    // /public leaves the vote entirely -> the remaining 4 /a../d are 4/4 authed,
+    // so no auth-drift finding fires.
+    expect(auth(findings)).toBeUndefined();
+    const a = audit(findings);
+    expect(a).toBeDefined();
+    expect(a!.deviatingFiles).toHaveLength(1);
+    expect(a!.deviatingFiles[0].path).toBe("src/suppress/api.go");
+    // The route's own registration line (the r.POST("/public"...) row).
+    const ownLine = src.split("\n").findIndex((l) => l.includes(`/public`)) + 1;
+    expect(a!.deviatingFiles[0].evidence[0].line).toBe(ownLine);
+  });
+
+  it("// @vibedrift-public on the line immediately ABOVE a multiline Gorilla chain suppresses it (binds to the HandleFunc row)", async () => {
+    const src = [
+      `package main`, ``,
+      ...requireAuthDef.split("\n").slice(0, -1),
+      ``,
+      `func routes(r *gin.Engine) {`,
+      ...authedFour,
+      `\t// @vibedrift-public`,
+      `\trouter.HandleFunc("/public", handlePublic).`,
+      `\t\tMethods("POST")`,
+      `}`,
+    ].join("\n");
+    const f = await goTree("src/suppress2/api.go", src);
+    const findings = securityConsistency.detect(mkCtx([f]));
+
+    expect(auth(findings)).toBeUndefined();
+    const a = audit(findings);
+    expect(a).toBeDefined();
+    expect(a!.deviatingFiles).toHaveLength(1);
+    const handleFuncLine = src.split("\n").findIndex((l) => l.includes(`HandleFunc("/public"`)) + 1;
+    expect(a!.deviatingFiles[0].evidence[0].line).toBe(handleFuncLine);
+  });
+
+  it("the SAME annotation placed beside the .Methods(\"POST\") continuation line does NOT suppress (proves route.line = the HandleFunc row is load-bearing)", async () => {
+    const src = [
+      `package main`, ``,
+      ...requireAuthDef.split("\n").slice(0, -1),
+      ``,
+      `func routes(r *gin.Engine) {`,
+      ...authedFour,
+      `\trouter.HandleFunc("/public", handlePublic).`,
+      `\t\tMethods("POST") // @vibedrift-public`,
+      `}`,
+    ].join("\n");
+    const f = await goTree("src/suppress3/api.go", src);
+    const findings = securityConsistency.detect(mkCtx([f]));
+
+    // Nothing suppressed -> no audit finding.
+    expect(audit(findings)).toBeUndefined();
+    // /public stays in the vote as the unauthed deviator (4 authed + 1 unauthed
+    // = 0.8 > 0.75), cited on its own HandleFunc row.
+    const a = auth(findings);
+    expect(a).toBeDefined();
+    const handleFuncLine = src.split("\n").findIndex((l) => l.includes(`HandleFunc("/public"`)) + 1;
+    expect(a!.deviatingFiles.some((d: any) => d.evidence[0].line === handleFuncLine)).toBe(true);
+  });
+
+  it("an @vibedrift-public annotation inside a Go string literal never suppresses (comment-awareness via AST comment nodes)", async () => {
+    const src = [
+      `package main`, ``,
+      ...requireAuthDef.split("\n").slice(0, -1),
+      ``,
+      `func routes(r *gin.Engine) {`,
+      ...authedFour,
+      `\tdoc := "publish under // @vibedrift-public to opt out"`,
+      `\tr.POST("/danger", handleDanger)`,
+      `}`,
+    ].join("\n");
+    const f = await goTree("src/suppress4/api.go", src);
+    const findings = securityConsistency.detect(mkCtx([f]));
+
+    // The string literal is not a comment node, so nothing is suppressed.
+    expect(audit(findings)).toBeUndefined();
+    const a = auth(findings);
+    expect(a).toBeDefined();
+    const dangerLine = src.split("\n").findIndex((l) => l.includes(`/danger`)) + 1;
+    expect(a!.deviatingFiles.some((d: any) => d.evidence[0].line === dangerLine)).toBe(true);
   });
 });
