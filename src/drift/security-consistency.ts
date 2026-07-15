@@ -37,6 +37,8 @@ import { pickIntentHint } from "./utils.js";
 import { extractJsRoutesAst, extractFileMiddlewareAst, SECURITY_AST } from "./security-ast.js";
 import { extractPythonRoutesAst, extractPythonFileMiddlewareAst } from "./security-ast-python.js";
 import { extractGoRoutesAst, extractGoFileMiddlewareAst } from "./security-ast-go.js";
+import { buildXFileIndex } from "./security-xfile-index.js";
+import type { CrossFileIndex } from "./security-xfile-index.js";
 import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security-suppression.js";
 
 // Canonical mutating set (upper-cased), shared with the in-loop classifier via
@@ -245,13 +247,17 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
 
 // ─── Route extraction (per-route middleware via proximity) ──────────
 
-function extractRoutes(files: DriftFile[], fileMw: Map<string, FileMiddleware>): RouteInfo[] {
+function extractRoutes(
+  files: DriftFile[],
+  fileMw: Map<string, FileMiddleware>,
+  xfile: CrossFileIndex,
+): RouteInfo[] {
   const routes: RouteInfo[] = [];
   for (const file of files) {
     if (!file.language) continue;
-    if (file.language === "go") extractGoRoutes(file, routes, fileMw);
+    if (file.language === "go") extractGoRoutes(file, routes, fileMw, xfile);
     else if (file.language === "javascript" || file.language === "typescript") extractJsRoutes(file, routes, fileMw);
-    else if (file.language === "python") extractPythonRoutes(file, routes, fileMw);
+    else if (file.language === "python") extractPythonRoutes(file, routes, fileMw, xfile);
   }
   return routes;
 }
@@ -266,7 +272,7 @@ function inheritedRateLimit(perRoute: boolean, fileMw: FileMiddleware | undefine
   return perRoute || (fileMw?.hasRateLimit ?? false);
 }
 
-function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
+function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>, xfile: CrossFileIndex) {
   // AST only on a CLEAN parse: tree-sitter always returns a tree for broken Go
   // (with ERROR nodes), and error recovery SWALLOWS later valid registrations
   // into a broken call's argument_list as clean-looking nested calls (a
@@ -277,8 +283,11 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
     // No FileMiddleware argument: the AST path computes receiver-scoped
     // inheritance from the tree itself (a file-level OR would false-bless
     // mixed-receiver files, and the index entry may carry cross-language noise
-    // for non-go files).
-    routes.push(...extractGoRoutesAst(file.tree, file.relativePath));
+    // for non-go files). The cross-file index lets an imported package
+    // middleware selector resolve to its in-repo defining body (blessing still
+    // requires that body to verifiably reject); an unresolved / external / index-
+    // disabled selector stays UNSURE, byte-identical to the in-file-only path.
+    routes.push(...extractGoRoutesAst(file.tree, file.relativePath, xfile));
     return;
   }
   extractGoRoutesRegex(file, routes, fileMw.get(file.relativePath));
@@ -396,7 +405,12 @@ function balancedDecoratorArgs(lines: string[], start: number): string {
   return out;
 }
 
-function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
+function extractPythonRoutes(
+  file: DriftFile,
+  routes: RouteInfo[],
+  fileMw: Map<string, FileMiddleware>,
+  xfile: CrossFileIndex,
+) {
   // AST only on a CLEAN parse: tree-sitter always returns a tree for broken
   // Python (with ERROR nodes), and error recovery can erase the whole file's
   // decorator structure or merge adjacent handlers' decorators into one
@@ -408,7 +422,7 @@ function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<s
     // inheritance from the tree itself (a file-level OR would false-bless
     // mixed-receiver files, and the index entry may carry cross-language noise
     // for non-python files).
-    routes.push(...extractPythonRoutesAst(file.tree, file.relativePath));
+    routes.push(...extractPythonRoutesAst(file.tree, file.relativePath, xfile));
     return;
   }
   extractPythonRoutesRegex(file, routes, fileMw.get(file.relativePath));
@@ -533,6 +547,13 @@ export const securityConsistency: DriftDetector = {
   detect(ctx: DriftContext): DriftFinding[] {
     const findings: DriftFinding[] = [];
     const fileMw = buildFileMiddlewareIndex(ctx.files);
+    // Repo-wide cross-file symbol index: lets the Python AST route extractor
+    // resolve an imported before_request hook / FastAPI dependency to its in-repo
+    // defining body, but ONLY when resolution is exact and unambiguous (every
+    // ambiguity refuses). Blessing still flows through the existing body-first
+    // classifier — a resolved body must verifiably reject. An imported symbol that
+    // does not resolve stays UNSURE, byte-identical to today.
+    const xfile = buildXFileIndex(ctx.files, ctx.goModulePath);
     // Denominator-removing suppression: a route carrying an inline
     // `// @vibedrift-public` annotation, OR whose file matches a config
     // `security.allowlist` glob (ctx.projectConfig), is dropped BEFORE it
@@ -544,7 +565,7 @@ export const securityConsistency: DriftDetector = {
     // loading one (e.g. the MCP/baseline path), in which case the allowlist
     // arm simply no-ops and only annotations suppress.
     const { kept: routes, suppressed } = applyRouteSuppressions(
-      extractRoutes(ctx.files, fileMw),
+      extractRoutes(ctx.files, fileMw, xfile),
       ctx.files,
       ctx.projectConfig ?? null,
     );
