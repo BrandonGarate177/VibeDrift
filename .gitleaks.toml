@@ -17,4 +17,5 @@ paths = [
   '''test/unit/analyzers/security-floor\.test\.ts''',
   '''test/calibration/injectors\.ts''',
   '''\.env\.example$''',
+  '''docs/handbook/.*\.md''',
 ]
