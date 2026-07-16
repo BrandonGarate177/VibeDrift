@@ -230,7 +230,7 @@ const GO_ROUTER_RECEIVER =
 // is moot for Gorilla specifically since mux.NewRouter is not itself in this
 // set, Gorilla method-chain semantics being out of scope until a later
 // task).
-const GO_ROUTER_CONSTRUCTORS = new Set(["gin.Default", "gin.New", "echo.New", "chi.NewRouter"]);
+const GO_ROUTER_CONSTRUCTORS = new Set(["gin.Default", "gin.New", "echo.New", "chi.NewRouter", "fiber.New", "mux.NewRouter"]);
 // Field name for a scoped-group derivation (`api := r.Group("/api")`): the
 // receiver on the left becomes a router in its own right.
 const GROUP_FIELD = "Group";
