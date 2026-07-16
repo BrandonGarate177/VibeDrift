@@ -1,5 +1,10 @@
 # CLI backlog
 
+- **Import-style drift is JS/TS only ([#56](https://github.com/VibeDrift/VibeDrift/issues/56)).** No import
+  convention check for Python, Go, or Rust (`imports` analyzer and the `import-consistency` detector are both
+  JS/TS-gated). Other languages get import parsing only for dependency/dead-code, not a style signal. Candidate
+  analyzer, tracked in the issue.
+
 - **Refresh `ARCHITECTURE.md` against the code (or fold it into the handbook).** Sections 11/20
   still describe the retired pre-v4 exponential scoring formula, `SCORING_VERSION "v3"`, and
   "24 security rules" vs the current v11 noisy-OR engine and 20 patterns; `AGENTS.md` says

@@ -83,9 +83,11 @@ Two independent checks for JS/TS (`src/analyzers/error-handling.ts`):
 
 Example: `src/data.ts` in the fixture ends with `export async function processData(items) { try { ... } catch (e) {} }`, an empty catch that lands in the aggregated finding.
 
+This analyzer is JS/TS only because empty `catch` and un-awaited async are JavaScript shapes. Error handling for Go, Python, and Rust is not absent; it lives in `language-specific` below (Go unchecked `err`, Python bare `except`, Rust `.unwrap()` overuse), which tags those findings `error-handling` too.
+
 ### `language-specific`: Language-Specific Patterns
 
-A grab bag of per-language idiom checks that do not fit the shared analyzers (`src/analyzers/language-specific.ts`):
+A grab bag of per-language idiom checks that do not fit the shared analyzers, including the error-handling checks for Go, Python, and Rust (`src/analyzers/language-specific.ts`):
 
 - **Go**: unchecked `err` assignments, flagged when the next non-comment line neither mentions `err` nor starts with `return` (warning, escalating to error above 10 hits, confidence 0.7); goroutines launched with no `ctx`/`context.` within 2 lines (warning, 0.6); `.Lock()` with no `defer .Unlock()` in the next 3 lines (warning, 0.75, "risk of deadlock").
 - **Python**: bare `except:` (error, confidence 0.95); mutable default arguments `=[]`, `={}`, `=set()` (warning, 0.9).
@@ -207,8 +209,8 @@ Example flagged: `return "placeholder";` inside a production request handler.
 |---|---|---|---|---|---|
 | `naming` | drift | Architectural Consistency | 2 | all | entropy gate 0.8; minority in 2+ files |
 | `imports` | drift | Architectural Consistency | 2 | JS/TS | non-builtin `require` in ESM |
-| `error-handling` | hygiene | Architectural Consistency | 1 | JS/TS | error above 5 empty catches |
-| `language-specific` | hygiene | Architectural Consistency | 1 | all (checks are Go/Py/Rust) | e.g. Rust: over 2 unwraps |
+| `error-handling` | hygiene | Architectural Consistency | 1 | JS/TS (Go, Python, Rust error handling is in `language-specific`) | error above 5 empty catches |
+| `language-specific` | hygiene | Architectural Consistency | 1 | all (Go/Py/Rust checks) | per-language error handling and idioms; e.g. Rust over 2 `.unwrap()` |
 | `duplicates` | hygiene | Redundancy | 3 | all | LCS similarity 0.7 or above |
 | `todo-density` | hygiene | Redundancy | 2 | all | Poisson `P < 0.05` per file |
 | `dead-code` | hygiene | Redundancy | 7 | all | over 3 dead exports |
@@ -218,3 +220,6 @@ Example flagged: `return "placeholder";` inside a production request handler.
 | `intent-clarity` | hygiene | Intent Clarity | 2 | all | 50/100-line functions; generic names |
 | `complexity` | hygiene | Intent Clarity | 3 | all | CC 6/10/15 tiers |
 | `implementation-gap` | hygiene | Intent Clarity | 1 | all | markers at 0.95 confidence |
+
+> [!NOTE]
+> The `Languages` column is where each analyzer's checks actually fire, not just where its files parse. `error-handling` is JS/TS because its patterns (empty `catch`, un-awaited async) are JavaScript shapes; the equivalent error-handling checks for Go, Python, and Rust live in `language-specific`. Import analysis (`imports`, and the `import-consistency` drift detector) is JS/TS only; there is no import-style or convention check for Python, Go, or Rust yet.
