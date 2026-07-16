@@ -175,4 +175,94 @@ export function run() { return readFile("./x"); }
     // chalk should NOT be flagged (it's declared)
     expect(missing!.message).not.toContain("chalk");
   });
+
+  it("keeps bare side-effect imports after other imports via AST", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    const fileContent = [
+      'import express from "express";',
+      'import "reflect-metadata";',
+    ].join("\n");
+    const file: SourceFile = {
+      path: "/test/src/index.ts",
+      relativePath: "src/index.ts",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: 2,
+    };
+    file.tree = (await parseFile(file)) ?? undefined;
+    expect(file.tree).toBeDefined();
+
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [file],
+      packageJson: {
+        dependencies: { express: "^4.0.0", "reflect-metadata": "^0.2.2" },
+      },
+      totalLines: 2,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const phantom = findings.find((f) => f.tags.includes("phantom"));
+    expect(phantom).toBeUndefined();
+  });
+
+  it("does not let regex quotes or JSX apostrophes hide later imports via AST", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    const fileContent = [
+      "const re = /['\"]/;",
+      'import fsExtra from "fs-extra";',
+      "const Note = () => <p>don't forget</p>;",
+      'const chalk = require("chalk");',
+    ].join("\n");
+    const file: SourceFile = {
+      path: "/test/src/index.tsx",
+      relativePath: "src/index.tsx",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: 4,
+    };
+    file.tree = (await parseFile(file)) ?? undefined;
+    expect(file.tree).toBeDefined();
+
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [file],
+      packageJson: { dependencies: {} },
+      totalLines: 4,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const missing = findings.find((f) => f.tags.includes("missing"));
+    expect(missing?.message).toContain("fs-extra");
+    expect(missing?.message).toContain("chalk");
+  });
+
+  it("detects literal template dynamic imports without counting docs in templates", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    const fileContent = [
+      'const docs = `await import("not-a-real-dep")`;',
+      "const zod = await import(`zod`);",
+    ].join("\n");
+    const file: SourceFile = {
+      path: "/test/src/index.ts",
+      relativePath: "src/index.ts",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: 2,
+    };
+    file.tree = (await parseFile(file)) ?? undefined;
+    expect(file.tree).toBeDefined();
+
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [file],
+      packageJson: { dependencies: {} },
+      totalLines: 2,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const missing = findings.find((f) => f.tags.includes("missing"));
+    expect(missing?.message).toContain("zod");
+    expect(missing?.message).not.toContain("not-a-real-dep");
+  });
 });

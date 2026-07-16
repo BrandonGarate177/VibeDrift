@@ -176,8 +176,14 @@ function extractDeclarationName(declaration: SyntaxNode): string | null {
   return null;
 }
 
-/** Extract the string value from a string node (strips quotes). */
+/** Extract the string value from a string/template node (strips quotes). */
 function extractStringValue(node: SyntaxNode): string | null {
+  if (node.type === "template_string") {
+    // Count only literal template specifiers: import(`pkg`). Dynamic templates
+    // like import(`${pkg}`) are runtime-dependent and should be ignored.
+    if (node.text.includes("${")) return null;
+    return node.text.slice(1, -1);
+  }
   const fragment = findChild(node, "string_fragment");
   return fragment?.text ?? null;
 }
@@ -223,7 +229,7 @@ function extractNestedImports(node: SyntaxNode, names: Set<string>, sources: Set
       if (callee.type === "import") {
         const args = findChild(child, "arguments");
         if (args) {
-          const sourceNode = findChild(args, "string");
+          const sourceNode = findChild(args, "string") ?? findChild(args, "template_string");
           if (sourceNode) {
             const source = extractStringValue(sourceNode);
             if (source) sources.add(source);
