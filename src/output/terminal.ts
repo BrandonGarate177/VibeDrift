@@ -493,6 +493,13 @@ function renderDiffBanner(result: ScanResult): string[] {
   if (result.previousScoresMismatch === "scoring-version-mismatch") return [];
   const diff = result.diff;
   if (!diff) return [];
+  // Same silence when the diffed PAIR spans scoring versions (e.g. `--since`
+  // targeting a scan from a prior engine) — the mismatch flag above only
+  // covers the latest scan. Note this fires before the `incomparable` branch
+  // below: a pre-schema-v3 scan also predates scoringVersion, so in the real
+  // CLI path (which always passes the current version) the "fresh baseline"
+  // line is reachable only for callers that omit scoringVersion.
+  if (diff.versionMismatch) return [];
 
   const lines: string[] = [];
   const when = relativeTime(diff.fromTimestamp);
