@@ -468,7 +468,7 @@ async function buildScanResult(
   // Tease — show "run --deep" upsell only when user is *not* using deep mode.
   // Pass codeDnaResult so the tease can name specific near-duplicate files
   // and opaque-named functions deep scan would confirm, not generic copy.
-  const teaseMessages = generateTeaseMessages(ctx, allFindings, options.deep === true, codeDnaResult);
+  const teaseMessages = generateTeaseMessages(ctx, allFindings, options.deep === true, codeDnaResult, bearerToken !== null);
   // Free Tier-1 reimplementation teaser (count only). Skipped on deep scans —
   // there the real panel-confirmed ml-reimplementation findings render instead.
   const reimplementationCandidates = options.deep

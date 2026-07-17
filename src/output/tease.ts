@@ -64,6 +64,7 @@ export function generateTeaseMessages(
   findings: Finding[],
   deepUsed: boolean,
   codeDnaResult?: CodeDnaResult,
+  isSignedIn?: boolean,
 ): string[] {
   if (deepUsed) return [];
   const messages: string[] = [];
@@ -152,7 +153,11 @@ export function generateTeaseMessages(
   }
 
   if (messages.length > 0) {
-    messages.push(`Sign in with \`vibedrift login\` (free, 10s) and run \`vibedrift --deep\`. 1 free deep scan/month.`);
+    if (isSignedIn) {
+      messages.push(`Run \`vibedrift . --deep\` to reveal them. Your first deep scan each month is free.`);
+    } else {
+      messages.push(`Sign in with \`vibedrift login\` (free, 10s) and run \`vibedrift --deep\`. 1 free deep scan/month.`);
+    }
   }
 
   return messages;
