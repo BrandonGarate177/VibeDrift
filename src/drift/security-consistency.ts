@@ -368,6 +368,9 @@ function extractGoRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddlewa
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const trimmed = line.trimStart();
+    // Skip comment lines — prevents phantom routes from commented-out code
+    if (trimmed.startsWith("//") || trimmed.startsWith("/*")) continue;
     let method = "", path = "";
     const echoMatch = line.match(echoPattern);
     if (echoMatch) { method = echoMatch[1]; path = echoMatch[2]; }
@@ -406,6 +409,9 @@ function extractJsRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddlewa
   const expressPattern = /\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`]+)['"`]/;
 
   for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    // Skip comment lines — prevents phantom routes from commented-out code
+    if (trimmed.startsWith("//") || trimmed.startsWith("/*")) continue;
     const match = lines[i].match(expressPattern);
     if (!match) continue;
     const path = match[1];
@@ -501,6 +507,9 @@ function extractPythonRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMidd
   const routePattern = /@\w+\.(?:route|get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/;
 
   for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    // Skip comment lines — prevents phantom routes from commented-out code
+    if (trimmed.startsWith("#") || trimmed.startsWith("//")) continue;
     const match = lines[i].match(routePattern);
     if (!match) continue;
     const path = match[1];

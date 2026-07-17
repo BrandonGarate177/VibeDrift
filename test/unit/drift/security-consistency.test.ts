@@ -781,7 +781,7 @@ describe("Python AST wiring (Task 4)", () => {
   const authFinding = (findings: any[]) => findings.find((f) => f.subCategory === "Auth middleware");
 
   // ── Seam 1: dispatch selects AST vs regex ──
-  it("dispatch: a route-shaped COMMENT yields a route via the regex path but NOT via the AST path", async () => {
+  it("dispatch: a route-shaped COMMENT is skipped by both the regex and AST paths (no phantom routes)", async () => {
     // 4 authed POST routes (per-route @requires_auth, which does NOT trip the
     // file-level pyAuth regex) plus a route-shaped COMMENT for /danger. The
     // regex extractor matches the comment (a live over-capture); the AST
@@ -793,12 +793,12 @@ describe("Python AST wiring (Task 4)", () => {
       `@app.post("/d")\n@requires_auth\ndef d(): return {}\n\n` +
       `# @app.post("/danger")\n`;
 
-    // Tree-less (regex): the comment extracts an unauthed POST /danger, so the
-    // 4/5 auth vote fires and cites it.
+    // Tree-less (regex): with the comment-skip fix, the commented-out route
+    // is no longer extracted as a phantom. Only 4 real authed routes exist,
+    // so no auth finding fires (same as the AST path).
     const regexCtx = mkCtx([file("src/routes/orders.py", src, "python")]);
     const regexFinding = authFinding(securityConsistency.detect(regexCtx));
-    expect(regexFinding).toBeDefined();
-    expect(regexFinding!.deviatingFiles.some((d: any) => d.detectedPattern.includes("/danger"))).toBe(true);
+    expect(regexFinding).toBeUndefined();
 
     // With a clean tree (AST): the comment is not a route, so all 4 real routes
     // are authed and no auth finding fires.
