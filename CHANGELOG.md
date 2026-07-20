@@ -26,6 +26,17 @@ explicitly under **Breaking** so CI users can recalibrate.
   the dashboard) omits it instead of showing a full-score bar next to the N/A.
 - Removed a crash risk on extremely large finding sets (whole-array argument spreads
   replaced with loops).
+- **Signed-in users no longer see the sign-in nudge.** `vibedrift watch` and any signed-in
+  `--format terminal` scan previously ended with "Sign in with `vibedrift login`" even
+  though the session was already authenticated. Signed-in state is now resolved locally
+  (zero egress — `--local-only` and `watch` are unaffected) and the closing line reads
+  "Run `vibedrift . --deep` to reveal them. Your first deep scan each month is free."
+- **The "Since last scan" diff no longer calls advisory findings drift.** The diff digest
+  and the persisted scan are both built from the scored drift view, so a below-floor
+  security finding (or a `@vibedrift-public` suppression) that the report renders as
+  advisory can no longer appear as a "new drift finding" in the banner or in
+  `.vibedrift/context.md`. Note: the first scan after this upgrade on a repo whose history
+  already persisted such findings reports them as "resolved" once, then self-heals.
 
 ## 0.16.2 — 2026-07-16
 

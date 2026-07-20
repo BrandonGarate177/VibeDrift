@@ -389,6 +389,7 @@ async function buildScanResult(
   startTime: number,
   timings: Record<string, number>,
   bearerToken: string | null,
+  signedIn: boolean,
   apiUrl: string | undefined,
   spinner: ReturnType<typeof ora> | null,
 ): Promise<ScanResult> {
@@ -468,7 +469,7 @@ async function buildScanResult(
   // Tease — show "run --deep" upsell only when user is *not* using deep mode.
   // Pass codeDnaResult so the tease can name specific near-duplicate files
   // and opaque-named functions deep scan would confirm, not generic copy.
-  const teaseMessages = generateTeaseMessages(ctx, allFindings, options.deep === true, codeDnaResult, bearerToken !== null);
+  const teaseMessages = generateTeaseMessages(ctx, allFindings, options.deep === true, codeDnaResult, signedIn);
   // Free Tier-1 reimplementation teaser (count only). Skipped on deep scans —
   // there the real panel-confirmed ml-reimplementation findings render instead.
   const reimplementationCandidates = options.deep
@@ -1135,6 +1136,15 @@ export async function runScan(
     ? await resolveAuthAndBanner(options)
     : { bearerToken: null, apiUrl: undefined };
 
+  // Signed-in state is independent of network mode. bearerToken is hard-set to
+  // null under --local-only (and `vibedrift watch` always scans local-only), so
+  // it cannot answer "is this user signed in?". resolveToken() is purely local
+  // (flag → env → config file, zero egress), so we can detect a signed-in
+  // session without breaking the --local-only zero-egress promise. This drives
+  // the tease copy only; every network path stays gated on the real bearerToken.
+  // (#64 item 1: a signed-in watch session must not print the sign-in nudge.)
+  const signedIn = bearerToken !== null || (await resolveToken()) !== null;
+
   // Kick off the passive update check as soon as we know the network
   // is allowed. Runs in parallel with the scan so it adds zero latency
   // in the common case (cache hit) and ~200ms worst-case (uncached
@@ -1170,7 +1180,7 @@ export async function runScan(
 
   const timings = { ...pipeline.timings, ...deepTimings.timings };
 
-  const result = await buildScanResult(pipeline, options, startTime, timings, bearerToken, apiUrl, spinner);
+  const result = await buildScanResult(pipeline, options, startTime, timings, bearerToken, signedIn, apiUrl, spinner);
 
   // Persist the RepoDriftBaseline as a scan side-effect so the MCP server's
   // cold start is a fast load rather than a 3–8s rebuild. Reuses the ctx +
@@ -1294,14 +1304,11 @@ export async function runScan(
   // Persisting `scoringVersion` lets future scans detect that this scan was
   // computed under a different formula and skip cross-version deltas.
   //
-  // Use the RAW driftResult.driftFindings (not the rendered/filtered
-  // result.driftFindings) so the persisted drift digests match the ones the
-  // scan-over-scan diff computes from the same raw array (see buildScanResult).
-  // If these two sources diverged, a below-floor security finding present in
-  // one but not the other would show as a spurious "new/resolved drift finding"
   // Save using the scored (rendered) drift view so the persisted scan matches
-  // the diff digest. A below-floor advisory never produces a spurious diff.
-  // The baseline (assembleBaseline) still reads the raw representation.
+  // the diff digest the scan-over-scan comparison computes from the same view.
+  // A below-floor advisory finding therefore never shows as a spurious
+  // "new/resolved drift finding". The baseline (assembleBaseline) still reads
+  // the raw representation.
   await saveScanResult(
     rootDir,
     result.scores,
