@@ -806,6 +806,22 @@ describe("Python AST wiring (Task 4)", () => {
     expect(authFinding(securityConsistency.detect(astCtx))).toBeUndefined();
   });
 
+  it("dispatch: a route-shaped line inside a Python docstring is not a phantom route (regex fallback)", () => {
+    // 4 authed POST routes plus a route-shaped line INSIDE a triple-quoted
+    // docstring. Python has no `//` comments, so the fallback tracks `"""`
+    // blocks: the /danger line is documentation, not a registration.
+    const src =
+      `@app.post("/a")\n@requires_auth\ndef a(): return {}\n\n` +
+      `@app.post("/b")\n@requires_auth\ndef b(): return {}\n\n` +
+      `@app.post("/c")\n@requires_auth\ndef c(): return {}\n\n` +
+      `@app.post("/d")\n@requires_auth\ndef d(): return {}\n\n` +
+      `"""\nExample usage:\n    @app.post("/danger")\n"""\n`;
+    // No tree -> regex fallback. The docstring-enclosed route must NOT become a
+    // phantom unauthed deviator, so no auth finding fires.
+    const regexFinding = authFinding(securityConsistency.detect(mkCtx([file("src/routes/orders.py", src, "python")])));
+    expect(regexFinding).toBeUndefined();
+  });
+
   it("tree-less parity: a plain @app.route(methods=['POST']) file still yields its route via the regex fallback", () => {
     const src =
       `@app.post("/a")\n@requires_auth\ndef a(): return {}\n` +
