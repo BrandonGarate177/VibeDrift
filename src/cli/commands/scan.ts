@@ -404,6 +404,7 @@ async function buildScanResult(
   startTime: number,
   timings: Record<string, number>,
   bearerToken: string | null,
+  signedIn: boolean,
   apiUrl: string | undefined,
   spinner: ReturnType<typeof ora> | null,
 ): Promise<ScanResult> {
@@ -483,7 +484,7 @@ async function buildScanResult(
   // Tease — show "run --deep" upsell only when user is *not* using deep mode.
   // Pass codeDnaResult so the tease can name specific near-duplicate files
   // and opaque-named functions deep scan would confirm, not generic copy.
-  const teaseMessages = generateTeaseMessages(ctx, allFindings, options.deep === true, codeDnaResult);
+  const teaseMessages = generateTeaseMessages(ctx, allFindings, options.deep === true, codeDnaResult, signedIn);
   // Free Tier-1 reimplementation teaser (count only). Skipped on deep scans —
   // there the real panel-confirmed ml-reimplementation findings render instead.
   const reimplementationCandidates = options.deep
@@ -501,6 +502,15 @@ async function buildScanResult(
   parts.push(`Total: ${(scanTimeMs / 1000).toFixed(1)}s`);
   console.error(chalk.dim(`  ${parts.join(" · ")}`));
 
+  // The DRIFT representation that rendering reads excludes below-floor
+  // route-consistency security findings (demoted to advisory; still present in
+  // `allFindings`/`result.findings` as hygiene-kind so we are never silent).
+  // Applied before the diff so saved scans and the diff digest agree with the
+  // rendered output — a below-floor advisory never appears as "new drift" in
+  // the comparison banner. driftResult.driftFindings itself is untouched so
+  // the baseline (assembleBaseline) still reads the raw representation.
+  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines);
+
   // Scan-over-scan diff. Defaults to enabled; `--no-compare` opts out.
   // `--since` overrides the default "latest prior scan" target.
   let diff: ScanResult["diff"];
@@ -514,7 +524,7 @@ async function buildScanResult(
         compositeScore,
         hygieneScore,
         findingDigests: allFindings.slice(0, 200).map(computeFindingDigest),
-        driftFindingDigests: (driftResult.driftFindings ?? []).slice(0, 100).map(computeDriftFindingDigest),
+        driftFindingDigests: (rendered.driftFindings ?? []).slice(0, 100).map(computeDriftFindingDigest),
         // Lets diffScans refuse cross-version comparisons for THIS pair —
         // `previousScoresMismatch` only covers the latest scan, but `--since`
         // can target any older scan, including one from a prior engine.
@@ -522,18 +532,6 @@ async function buildScanResult(
       });
     }
   }
-
-  // The DRIFT representation that rendering reads excludes below-floor
-  // route-consistency security findings (demoted to advisory; still present in
-  // `allFindings`/`result.findings` as hygiene-kind so we are never silent).
-  // Applying it here, at the single point where result.driftFindings /
-  // result.driftScores are produced, keeps every raw-driftFindings consumer
-  // (findings library, codebase intent, coherence heatmap, pattern consensus,
-  // CSV/DOCX, context.md) and the per-category breakdown consistent with the
-  // category's N/A WITHOUT a gate in each widget. driftResult.driftFindings
-  // itself is untouched, so the baseline (assembleBaseline) and the diff
-  // digests below keep reading the raw drift representation unchanged.
-  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines);
 
   const result: ScanResult = {
     context: ctx,
@@ -1153,6 +1151,15 @@ export async function runScan(
     ? await resolveAuthAndBanner(options)
     : { bearerToken: null, apiUrl: undefined };
 
+  // Signed-in state is independent of network mode. bearerToken is hard-set to
+  // null under --local-only (and `vibedrift watch` always scans local-only), so
+  // it cannot answer "is this user signed in?". resolveToken() is purely local
+  // (flag → env → config file, zero egress), so we can detect a signed-in
+  // session without breaking the --local-only zero-egress promise. This drives
+  // the tease copy only; every network path stays gated on the real bearerToken.
+  // (#64 item 1: a signed-in watch session must not print the sign-in nudge.)
+  const signedIn = bearerToken !== null || (await resolveToken()) !== null;
+
   // Kick off the passive update check as soon as we know the network
   // is allowed. Runs in parallel with the scan so it adds zero latency
   // in the common case (cache hit) and ~200ms worst-case (uncached
@@ -1187,7 +1194,7 @@ export async function runScan(
 
   const timings = { ...pipeline.timings, ...deepTimings.timings };
 
-  const result = await buildScanResult(pipeline, options, startTime, timings, bearerToken, apiUrl, spinner);
+  const result = await buildScanResult(pipeline, options, startTime, timings, bearerToken, signedIn, apiUrl, spinner);
 
   // Persist the RepoDriftBaseline as a scan side-effect so the MCP server's
   // cold start is a fast load rather than a 3–8s rebuild. Reuses the ctx +
@@ -1311,12 +1318,11 @@ export async function runScan(
   // Persisting `scoringVersion` lets future scans detect that this scan was
   // computed under a different formula and skip cross-version deltas.
   //
-  // Use the RAW driftResult.driftFindings (not the rendered/filtered
-  // result.driftFindings) so the persisted drift digests match the ones the
-  // scan-over-scan diff computes from the same raw array (see buildScanResult).
-  // If these two sources diverged, a below-floor security finding present in
-  // one but not the other would show as a spurious "new/resolved drift finding"
-  // on every scan. Baseline + diff track the raw representation for continuity.
+  // Save using the scored (rendered) drift view so the persisted scan matches
+  // the diff digest the scan-over-scan comparison computes from the same view.
+  // A below-floor advisory finding therefore never shows as a spurious
+  // "new/resolved drift finding". The baseline (assembleBaseline) still reads
+  // the raw representation.
   await saveScanResult(
     rootDir,
     result.scores,
@@ -1324,7 +1330,7 @@ export async function runScan(
     result.hygieneScores,
     result.hygieneScore,
     result.findings,
-    pipeline.driftResult.driftFindings,
+    result.driftFindings,
     result.scoringVersion,
   );
 
