@@ -16,6 +16,16 @@ import {
   inheritedValidation,
   inheritedRateLimit,
 } from "./shared.js";
+import {
+  PY_ROUTE,
+  PY_DECORATOR_VERB,
+  PY_METHODS_KWARG,
+  PY_METHODS_VERBS,
+  PY_AUTH,
+  PY_VALIDATION,
+  PY_RATE_LIMIT,
+  PY_ERROR_HANDLER,
+} from "./patterns.js";
 
 /** Text inside a Python route decorator's parentheses: from the first "(" on
  *  line `start` to its matching ")", spanning continuation lines. Bounded by
@@ -67,7 +77,6 @@ function balancedDecoratorArgs(lines: string[], start: number): string {
 function extractPythonRoutesRegex(file: DriftFile, fileMiddleware: FileMiddleware | undefined): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const lines = file.content.split("\n");
-  const routePattern = /@\w+\.(?:route|get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/;
 
   let inDocstring = false;
   for (let i = 0; i < lines.length; i++) {
@@ -83,7 +92,7 @@ function extractPythonRoutesRegex(file: DriftFile, fileMiddleware: FileMiddlewar
     // Skip comment lines — Python uses '#'. Prevents phantom routes from
     // commented-out code.
     if (isCommentLine(lines[i], PYTHON_COMMENT_MARKERS)) continue;
-    const match = lines[i].match(routePattern);
+    const match = lines[i].match(PY_ROUTE);
     if (!match) continue;
     const path = match[1];
     // Flask's @app.route defaults to GET when no methods= kwarg is present, NOT an
@@ -92,35 +101,34 @@ function extractPythonRoutesRegex(file: DriftFile, fileMiddleware: FileMiddlewar
     // the route as mutating. The kwarg is read from the route's own decorator
     // via balanced paren scanning, so it can never bleed into an adjacent
     // route's decorator even when routes sit right next to each other.
-    const decoratorVerb = lines[i].match(/\.(get|post|put|patch|delete)\s*\(/)?.[1]?.toUpperCase();
+    const decoratorVerb = lines[i].match(PY_DECORATOR_VERB)?.[1]?.toUpperCase();
     let method = decoratorVerb ?? "GET";
     const decoratorArgs = balancedDecoratorArgs(lines, i);
-    const methodsKw = decoratorArgs.match(/methods\s*=\s*\[([^\]]*)\]/i);
+    const methodsKw = decoratorArgs.match(PY_METHODS_KWARG);
     if (methodsKw) {
-      const verbs = (methodsKw[1].match(/["'](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["']/gi) ?? [])
+      const verbs = (methodsKw[1].match(PY_METHODS_VERBS) ?? [])
         .map((v) => v.replace(/["']/g, "").toUpperCase());
       const mutating = verbs.find((v) => MUTATION_METHODS.includes(v));
       method = mutating ?? verbs[0] ?? method;
     }
     const context = lines.slice(i, Math.min(lines.length, i + 30)).join("\n");
 
-    const perAuth = /login_required|jwt_required|@requires|permission|token/.test(context);
-    const perVal = /pydantic|validate|Schema|Serializer/.test(context);
-    const perRate = /rate_limit|throttle|limiter/.test(context);
+    const perAuth = PY_AUTH.test(context);
+    const perVal = PY_VALIDATION.test(context);
+    const perRate = PY_RATE_LIMIT.test(context);
 
     routes.push({
       method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
-      hasErrorHandler: /try|except|raise/.test(context),
+      hasErrorHandler: PY_ERROR_HANDLER.test(context),
     });
   }
   return routes;
 }
 
 export const pythonRouteExtractor: RouteExtractor = {
-  language: "python",
   extract(file, deps) {
     // AST only on a CLEAN parse: tree-sitter always returns a tree for broken
     // Python (with ERROR nodes), and error recovery can erase the whole file's

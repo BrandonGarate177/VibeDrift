@@ -16,38 +16,44 @@ import {
   inheritedValidation,
   inheritedRateLimit,
 } from "./shared.js";
+import {
+  JS_ROUTE,
+  JS_METHOD,
+  JS_AUTH,
+  JS_VALIDATION,
+  JS_RATE_LIMIT,
+  JS_ERROR_HANDLER,
+} from "./patterns.js";
 
 function extractJsRoutesRegex(file: DriftFile, fileMiddleware: FileMiddleware | undefined): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const lines = file.content.split("\n");
-  const expressPattern = /\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`]+)['"`]/;
 
   for (let i = 0; i < lines.length; i++) {
     // Skip comment lines — prevents phantom routes from commented-out code.
     if (isCommentLine(lines[i], C_STYLE_COMMENT_MARKERS)) continue;
-    const match = lines[i].match(expressPattern);
+    const match = lines[i].match(JS_ROUTE);
     if (!match) continue;
     const path = match[1];
-    const method = match[0].match(/\.(get|post|put|patch|delete|all)/)?.[1]?.toUpperCase() ?? "ANY";
+    const method = match[0].match(JS_METHOD)?.[1]?.toUpperCase() ?? "ANY";
     const context = lines.slice(Math.max(0, i - 5), i + 20).join("\n");
 
-    const perAuth = /(?:requireAuth|isAuthenticated|passport\.authenticate|verifyToken|jwt|authMiddleware)/.test(context);
-    const perVal = /validate|joi|zod|yup|celebrate|body\(|query\(/.test(context);
-    const perRate = /rateLimit|throttle|limiter/.test(context);
+    const perAuth = JS_AUTH.test(context);
+    const perVal = JS_VALIDATION.test(context);
+    const perRate = JS_RATE_LIMIT.test(context);
 
     routes.push({
       method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
-      hasErrorHandler: /catch|try|\.catch|next\(err/.test(context),
+      hasErrorHandler: JS_ERROR_HANDLER.test(context),
     });
   }
   return routes;
 }
 
 export const jsRouteExtractor: RouteExtractor = {
-  language: "javascript", // also serves the "typescript" dispatch key
   extract(file, deps) {
     const fileMiddleware = deps.fileMw.get(file.relativePath);
     if (file.tree) {

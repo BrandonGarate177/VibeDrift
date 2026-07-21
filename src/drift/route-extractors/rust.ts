@@ -13,7 +13,6 @@ import { extractRustRoutesAst } from "../security-ast-rust.js";
 import type { RouteExtractor } from "./types.js";
 
 export const rustRouteExtractor: RouteExtractor = {
-  language: "rust",
   extract(file) {
     if (file.tree && !file.tree.rootNode.hasError) {
       return extractRustRoutesAst(file.tree, file.relativePath);

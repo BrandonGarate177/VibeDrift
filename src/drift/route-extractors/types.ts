@@ -9,7 +9,6 @@
  */
 
 import type { DriftFile } from "../types.js";
-import type { SupportedLanguage } from "../../core/types.js";
 import type { CrossFileIndex } from "../security-xfile-index.js";
 
 export interface FileMiddleware {
@@ -53,9 +52,10 @@ export interface ExtractDeps {
 /**
  * A per-language route extractor. `extract` runs the AST path on a clean parse
  * and falls back to regex otherwise, returning the routes for a single file.
- * Stateless — a plain object satisfies it (no class needed).
+ * Stateless — a plain object satisfies it (no class needed). Dispatch is by the
+ * `ROUTE_EXTRACTORS` table key in security-consistency.ts; extractors carry no
+ * language tag of their own (one extractor can serve several keys, e.g. js+ts).
  */
 export interface RouteExtractor {
-  language: SupportedLanguage;
   extract(file: DriftFile, deps: ExtractDeps): RouteInfo[];
 }

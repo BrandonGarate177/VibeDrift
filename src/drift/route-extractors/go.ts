@@ -15,44 +15,49 @@ import {
   inheritedRateLimit,
   findHandlerContent,
 } from "./shared.js";
+import {
+  GO_ROUTE_ECHO,
+  GO_ROUTE_GORILLA,
+  GO_AUTH,
+  GO_VALIDATION,
+  GO_RATE_LIMIT,
+  GO_ERROR_HANDLER,
+} from "./patterns.js";
 
 function extractGoRoutesRegex(file: DriftFile, fileMiddleware: FileMiddleware | undefined): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const lines = file.content.split("\n");
-  const echoPattern = /\.\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(\s*"([^"]+)"/;
-  const gorillaPattern = /HandleFunc\s*\(\s*"([^"]+)".*\.Methods\s*\(\s*"(\w+)"/;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     // Skip comment lines — prevents phantom routes from commented-out code.
     if (isCommentLine(line, C_STYLE_COMMENT_MARKERS)) continue;
     let method = "", path = "";
-    const echoMatch = line.match(echoPattern);
+    const echoMatch = line.match(GO_ROUTE_ECHO);
     if (echoMatch) { method = echoMatch[1]; path = echoMatch[2]; }
-    const gorillaMatch = line.match(gorillaPattern);
+    const gorillaMatch = line.match(GO_ROUTE_GORILLA);
     if (gorillaMatch) { path = gorillaMatch[1]; method = gorillaMatch[2]; }
     if (!method || !path) continue;
 
     const context = lines.slice(Math.max(0, i - 10), i + 10).join("\n");
     const handlerContent = findHandlerContent(file.content, path);
 
-    const perAuth = /[Aa]uth|[Tt]oken|require[A-Z]|middleware\.\w*[Aa]uth/.test(context);
-    const perVal = /[Bb]ind|[Vv]alidat|[Pp]arse/.test(handlerContent);
-    const perRate = /[Rr]ate[Ll]imit|[Tt]hrottle/.test(context + handlerContent);
+    const perAuth = GO_AUTH.test(context);
+    const perVal = GO_VALIDATION.test(handlerContent);
+    const perRate = GO_RATE_LIMIT.test(context + handlerContent);
 
     routes.push({
       method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
-      hasErrorHandler: /catch|err\s*!=\s*nil|try|except|\.catch/.test(handlerContent),
+      hasErrorHandler: GO_ERROR_HANDLER.test(handlerContent),
     });
   }
   return routes;
 }
 
 export const goRouteExtractor: RouteExtractor = {
-  language: "go",
   extract(file, deps) {
     // AST only on a CLEAN parse: tree-sitter always returns a tree for broken Go
     // (with ERROR nodes), and error recovery SWALLOWS later valid registrations

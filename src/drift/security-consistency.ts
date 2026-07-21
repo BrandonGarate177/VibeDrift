@@ -277,7 +277,10 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
 // Route extraction dispatched by language. Each per-language module is a
 // self-contained functional RouteExtractor (AST on a clean parse, regex
 // fallback otherwise). JS and TS share one extractor.
-const ROUTE_EXTRACTORS: Partial<Record<SupportedLanguage, RouteExtractor>> = {
+// Every SupportedLanguage must appear here: this is a total Record (not Partial),
+// so adding a language to the union without wiring an extractor is a compile
+// error at this literal rather than a silent "zero routes for that language".
+const ROUTE_EXTRACTORS: Record<SupportedLanguage, RouteExtractor> = {
   go: goRouteExtractor,
   javascript: jsRouteExtractor,
   typescript: jsRouteExtractor,
@@ -293,8 +296,10 @@ function extractRoutes(
   const routes: RouteInfo[] = [];
   const deps: ExtractDeps = { fileMw, xfile };
   for (const file of files) {
-    const extractor = file.language ? ROUTE_EXTRACTORS[file.language as SupportedLanguage] : undefined;
-    if (extractor) routes.push(...extractor.extract(file, deps));
+    // `in` guard keeps this runtime-safe for files whose language isn't a
+    // SupportedLanguage (or is null) — those are simply skipped.
+    if (!file.language || !(file.language in ROUTE_EXTRACTORS)) continue;
+    routes.push(...ROUTE_EXTRACTORS[file.language as SupportedLanguage].extract(file, deps));
   }
   return routes;
 }
