@@ -73,4 +73,12 @@ export const AXES: Record<string, AxisMeta> = {
     patternNames: { crate: "absolute (use crate::)", relative: "relative (use super::/self::)" },
     noConventionRecommendation: "Pick absolute (`crate::`) or relative (`super::`/`self::`) intra-crate paths and apply it consistently.",
   },
+  // Rust: are uses grouped by origin (std / external / internal) with blank lines, or flat?
+  rust_grouping: {
+    subCategory: "rust_grouping",
+    headline: "Rust use grouping",
+    axisLabel: "Rust use grouping",
+    patternNames: { grouped: "grouped uses (std/external/crate blank-line separated)", flat: "a single flat use block" },
+    noConventionRecommendation: "Pick one use-grouping convention (grouped by origin or flat) and apply it consistently.",
+  },
 };

@@ -68,3 +68,25 @@ describe("Rust intra-crate use path (rust_use_path)", () => {
   });
 });
 
+describe("Rust use grouping (rust_grouping)", () => {
+  it("grouped: std and internal separated by a blank line", async () => {
+    const f = await rs("src/a.rs", `use std::collections::HashMap;\n\nuse crate::models::User;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("grouped");
+  });
+
+  it("flat: ≥2 origins, no blank line", async () => {
+    const f = await rs("src/a.rs", `use std::collections::HashMap;\nuse crate::models::User;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("flat");
+  });
+
+  it("not decidable: a single origin (std only)", async () => {
+    const f = await rs("src/a.rs", `use std::collections::HashMap;\nuse std::fmt::Debug;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")).toEqual([]);
+  });
+
+  it("regex fallback: grouped", () => {
+    const f = treeless("src/a.rs", `use std::collections::HashMap;\n\nuse serde::Deserialize;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("grouped");
+  });
+});
+
