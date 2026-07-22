@@ -33,6 +33,14 @@ export const AXES: Record<string, AxisMeta> = {
     patternNames: { grouped: "grouped imports (blank-line separated)", flat: "a single flat import block" },
     noConventionRecommendation: "Pick one import-grouping convention (grouped or flat) and apply it across the package (gofmt/goimports group stdlib separately).",
   },
+  // Go: are imports sorted within each group (gofmt order) or not?
+  go_ordering: {
+    subCategory: "go_ordering",
+    headline: "Go import ordering",
+    axisLabel: "Go import ordering",
+    patternNames: { ordered: "sorted imports (gofmt order)", unordered: "unsorted imports" },
+    noConventionRecommendation: "Run gofmt/goimports so imports are sorted within each group.",
+  },
   // Python: intra-package imports written absolute (from pkg.mod) vs relative (from .mod).
   py_path_style: {
     subCategory: "py_path_style",

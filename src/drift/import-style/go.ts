@@ -1,58 +1,42 @@
 /**
- * Go import-style classifier — axis `go_grouping`.
+ * Go import-style classifier — axes `go_grouping` and `go_ordering`.
  *
- * Shallow first pass: within a block `import ( … )`, is the file's stdlib vs
- * external imports separated by a blank line (`grouped`) or run together in one
- * flat block (`flat`)? Only classifies files that import from **≥2 origin
- * categories** (stdlib vs dotted-external), so a pure-stdlib file is never a
- * false deviator. Category is inferred without go.mod ("dot in first path
- * segment" ⇒ external); local-module paths look like stdlib, which only causes
- * safe under-detection. A go.mod-aware, boundary-precise pass is a later layer.
+ * `go_grouping`: within a block `import ( … )`, are stdlib vs external imports
+ * separated by a blank line (`grouped`) or run together (`flat`)? Only files
+ * with ≥2 origin categories (stdlib vs dotted-external) are classified, so a
+ * pure-stdlib file is never a false deviator. go.mod-aware grouping is a later layer.
  *
- * AST on a clean parse (tree-sitter `import_spec_list`), regex fallback otherwise.
+ * `go_ordering`: are imports sorted (`ordered`) within each blank-line group, the
+ * way gofmt/goimports leaves them (byte-ascending), or not (`unordered`)? Checked
+ * per group so a correctly-grouped file isn't judged across group boundaries.
+ * ≥3 imports to decide.
+ *
+ * AST on a clean parse (`import_spec_list`), regex fallback otherwise.
  */
 
-import type { Tree, SyntaxNode } from "../../core/types.js";
+import type { Tree } from "../../core/types.js";
 import type { DriftFile } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { GO_IMPORT_BLOCK_START, GO_IMPORT_BLOCK_END, GO_IMPORT_PATH } from "./patterns.js";
 
-interface Spec { row: number; category: "stdlib" | "external"; code: string; }
+interface Spec { row: number; path: string; category: "stdlib" | "external"; code: string; }
 
 /** stdlib import paths have no `.` in their first segment (`fmt`, `net/http`);
  *  a dotted first segment (`github.com/...`) is external. Local-module paths
- *  (no dot) read as stdlib here — deliberate: it only drops a category, never
- *  invents one. */
+ *  read as stdlib here — deliberate: it drops a category, never invents one. */
 function goCategory(path: string): "stdlib" | "external" {
   return path.split("/")[0].includes(".") ? "external" : "stdlib";
 }
 
 function stripGoQuotes(text: string): string {
   const t = text.trim();
-  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("`") && t.endsWith("`"))) {
-    return t.slice(1, -1);
-  }
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("`") && t.endsWith("`"))) return t.slice(1, -1);
   return t;
 }
 
-/** Decide grouped/flat from the specs of one block. Requires ≥2 specs across
- *  ≥2 categories; a blank line (row gap > 1) anywhere in the block ⇒ grouped. */
-function classifyBlock(specs: Spec[]): AxisClassification | null {
-  if (specs.length < 2) return null;
-  const categories = new Set(specs.map((s) => s.category));
-  if (categories.size < 2) return null; // single origin — grouping isn't meaningful
-
-  const sorted = [...specs].sort((a, b) => a.row - b.row);
-  let grouped = false;
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].row - sorted[i - 1].row > 1) { grouped = true; break; }
-  }
-  const evidence = sorted.slice(0, 3).map((s) => ({ line: s.row + 1, code: s.code }));
-  return { axis: "go_grouping", pattern: grouped ? "grouped" : "flat", evidence };
-}
-
-function fromAst(tree: Tree): AxisClassification | null {
+/** Specs of the first block import in the file, in source order. */
+function collectAst(tree: Tree): Spec[] {
   for (const list of tree.rootNode.descendantsOfType("import_spec_list")) {
     if (!list) continue;
     const specs: Spec[] = [];
@@ -61,41 +45,70 @@ function fromAst(tree: Tree): AxisClassification | null {
       const pathNode = spec.childForFieldName("path");
       if (!pathNode) continue;
       const path = stripGoQuotes(pathNode.text);
-      specs.push({ row: spec.startPosition.row, category: goCategory(path), code: spec.text.trim() });
+      specs.push({ row: spec.startPosition.row, path, category: goCategory(path), code: spec.text.trim() });
     }
-    const res = classifyBlock(specs);
-    if (res) return res;
+    if (specs.length > 0) return specs.sort((a, b) => a.row - b.row);
   }
-  return null;
+  return [];
 }
 
-function fromRegex(content: string): AxisClassification | null {
+function collectRegex(content: string): Spec[] {
   const lines = content.split("\n");
   let start = -1;
   for (let i = 0; i < lines.length; i++) {
     if (GO_IMPORT_BLOCK_START.test(lines[i])) { start = i; break; }
   }
-  if (start === -1) return null;
-
+  if (start === -1) return [];
   const specs: Spec[] = [];
   for (let i = start + 1; i < lines.length; i++) {
     if (GO_IMPORT_BLOCK_END.test(lines[i])) break;
     const m = lines[i].match(GO_IMPORT_PATH);
-    if (!m) continue; // blank line or comment — not a spec (its absence leaves a row gap)
+    if (!m) continue;
     const path = m[1] ?? m[2];
-    specs.push({ row: i, category: goCategory(path), code: lines[i].trim() });
+    specs.push({ row: i, path, category: goCategory(path), code: lines[i].trim() });
   }
-  return classifyBlock(specs);
+  return specs;
+}
+
+function evidenceOf(specs: Spec[]): { line: number; code: string }[] {
+  return specs.slice(0, 3).map((s) => ({ line: s.row + 1, code: s.code }));
+}
+
+function grouping(specs: Spec[]): AxisClassification | null {
+  if (specs.length < 2) return null;
+  if (new Set(specs.map((s) => s.category)).size < 2) return null;
+  let grouped = false;
+  for (let i = 1; i < specs.length; i++) {
+    if (specs[i].row - specs[i - 1].row > 1) { grouped = true; break; }
+  }
+  return { axis: "go_grouping", pattern: grouped ? "grouped" : "flat", evidence: evidenceOf(specs) };
+}
+
+function ordering(specs: Spec[]): AxisClassification | null {
+  if (specs.length < 3) return null;
+  // Check each blank-line-delimited group is byte-ascending on its own.
+  let ordered = true;
+  let groupStart = 0;
+  for (let i = 1; i <= specs.length && ordered; i++) {
+    const boundary = i === specs.length || specs[i].row - specs[i - 1].row > 1;
+    if (!boundary) continue;
+    for (let j = groupStart + 1; j < i; j++) {
+      if (specs[j].path < specs[j - 1].path) { ordered = false; break; }
+    }
+    groupStart = i;
+  }
+  return { axis: "go_ordering", pattern: ordered ? "ordered" : "unordered", evidence: evidenceOf(specs) };
 }
 
 export const goImportClassifier: ImportStyleClassifier = {
   classify(file: DriftFile): AxisClassification[] {
     if (!isAnalyzableSource(file.relativePath)) return [];
-    if (file.tree && !file.tree.rootNode.hasError) {
-      const r = fromAst(file.tree);
-      return r ? [r] : [];
-    }
-    const r = fromRegex(file.content);
-    return r ? [r] : [];
+    const specs = file.tree && !file.tree.rootNode.hasError ? collectAst(file.tree) : collectRegex(file.content);
+    const out: AxisClassification[] = [];
+    const g = grouping(specs);
+    if (g) out.push(g);
+    const o = ordering(specs);
+    if (o) out.push(o);
+    return out;
   },
 };

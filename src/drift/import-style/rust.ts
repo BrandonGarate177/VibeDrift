@@ -11,7 +11,6 @@
  * AST on a clean parse (`use_declaration` / `use_wildcard`), regex fallback otherwise.
  */
 
-import type { Tree } from "../../core/types.js";
 import type { DriftFile, Evidence } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
