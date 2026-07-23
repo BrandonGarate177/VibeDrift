@@ -12,6 +12,7 @@ import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { JS_IMPORT_LINE, JS_FROM_SPECIFIER, JS_REQUIRE } from "./patterns.js";
 import { EVIDENCE_LIMIT, binaryMajority } from "./shared.js";
+import { isCommentLine, C_STYLE_COMMENT_MARKERS } from "../comment-markers.js";
 
 export const jsImportClassifier: ImportStyleClassifier = {
   classify(file: DriftFile): AxisClassification[] {
@@ -33,7 +34,7 @@ export const jsImportClassifier: ImportStyleClassifier = {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) continue; // skip comment lines
+      if (isCommentLine(line, C_STYLE_COMMENT_MARKERS)) continue;
       if (JS_IMPORT_LINE.test(line)) {
         // ES module: import … from "spec"
         const fromMatch = line.match(JS_FROM_SPECIFIER);

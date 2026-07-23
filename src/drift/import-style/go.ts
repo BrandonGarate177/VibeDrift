@@ -21,6 +21,7 @@ import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { GO_IMPORT_BLOCK_START, GO_IMPORT_BLOCK_END, GO_IMPORT_PATH, GO_IMPORT_SINGLE } from "./patterns.js";
 import { cleanTree, capEvidence } from "./shared.js";
+import { isCommentLine, C_STYLE_COMMENT_MARKERS } from "../comment-markers.js";
 
 interface Spec { row: number; path: string; category: "stdlib" | "external"; code: string; }
 
@@ -58,6 +59,7 @@ function collectRegex(content: string): Spec[] {
   const specs: Spec[] = [];
   let inBlock = false;
   for (let i = 0; i < lines.length; i++) {
+    if (isCommentLine(lines[i], C_STYLE_COMMENT_MARKERS)) continue; // a commented "path" is not a real import
     if (inBlock) {
       if (GO_IMPORT_BLOCK_END.test(lines[i])) { inBlock = false; continue; }
       const m = lines[i].match(GO_IMPORT_PATH);

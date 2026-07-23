@@ -34,6 +34,7 @@
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./types.js";
 import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
+import { isCommentLine, C_STYLE_COMMENT_MARKERS, PYTHON_COMMENT_MARKERS } from "./comment-markers.js";
 import { extractJsRoutesAst, extractFileMiddlewareAst, SECURITY_AST } from "./security-ast.js";
 import { extractPythonRoutesAst, extractPythonFileMiddlewareAst } from "./security-ast-python.js";
 import { extractGoRoutesAst, extractGoFileMiddlewareAst } from "./security-ast-go.js";
@@ -341,19 +342,9 @@ function inheritedRateLimit(perRoute: boolean, fileMw: FileMiddleware | undefine
 }
 
 // ─── Regex-fallback comment skipping ─────────────────────────────────
-// The regex route extractors (used when tree-sitter has no clean parse) match
-// route-shaped text line by line. A commented-out registration must NOT become
-// a phantom route — it would steal a @vibedrift-public annotation from the real
-// route below it (see #64 item 4). JS/TS and Go share C-style comments, so their
-// markers live in one place; Python differs (# line comments, """/''' docstrings).
-const C_STYLE_COMMENT_MARKERS = ["//", "/*"] as const; // JS, TS, Go
-const PYTHON_COMMENT_MARKERS = ["#"] as const;
-
-/** True when a source line is a line comment for the given markers. */
-function isCommentLine(line: string, markers: readonly string[]): boolean {
-  const trimmed = line.trimStart();
-  return markers.some((m) => trimmed.startsWith(m));
-}
+// Comment-line detection (shared with the import-style classifiers) lives in
+// `comment-markers.ts`; the regex route extractors below use it so a
+// commented-out registration never becomes a phantom route (#64 item 4).
 
 function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>, xfile: CrossFileIndex) {
   // AST only on a CLEAN parse: tree-sitter always returns a tree for broken Go

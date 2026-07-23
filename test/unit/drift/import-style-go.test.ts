@@ -120,3 +120,13 @@ describe("Go single-line imports", () => {
     expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("flat");
   });
 });
+
+
+describe("Go regex fallback skips commented import paths", () => {
+  it("a commented-out import path is not counted as a spec", () => {
+    // The commented external import must not add a second origin — otherwise
+    // this stdlib-only block would look decidable. (treeless → regex fallback.)
+    const f = treeless("c.go", `package main\n\nimport (\n\t"fmt"\n\t"net/http"\n\t// "github.com/evil/pkg"\n)\n`);
+    expect(axis(goImportClassifier.classify(f), "go_grouping")).toEqual([]);
+  });
+});
