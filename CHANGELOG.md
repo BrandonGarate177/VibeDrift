@@ -6,6 +6,8 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+## 0.16.3 — 2026-07-22
+
 ### Fixed
 
 - **Go multi-module repos no longer get false "imports not in go.mod" errors.** The
