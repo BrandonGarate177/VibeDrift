@@ -10,7 +10,8 @@
  * `py_wildcard`: `from x import *` vs explicit names — a universal style, so all
  * from-imports count. Decidable with a wildcard present or ≥2 from-imports.
  *
- * AST on a clean parse (`import_from_statement`), regex fallback otherwise. A
+ * AST on a clean parse (`import_from_statement`), regex fallback otherwise (the
+ * fallback skips `#` comments and triple-quoted docstring bodies). A
  * package-root-aware path-style pass (src-layout) is a later layer.
  */
 
@@ -20,6 +21,28 @@ import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { PY_FROM_RELATIVE, PY_FROM_ABSOLUTE, PY_FROM_ANY, PY_WILDCARD } from "./patterns.js";
 import { EVIDENCE_LIMIT, capEvidence, cleanTree, binaryMajority } from "./shared.js";
+import { isCommentLine, PYTHON_COMMENT_MARKERS } from "../comment-markers.js";
+
+/**
+ * Blank out `#` comment lines and triple-quoted docstring bodies so the
+ * from-import regexes never match an import that only appears inside a comment
+ * or a docstring. Regex-fallback only — the AST path is already immune
+ * (a docstring is a string literal, not an `import_from_statement`).
+ */
+function stripPyNonCode(lines: string[]): string[] {
+  let inDoc = false;
+  return lines.map((line) => {
+    const triples = (line.match(/"""|'''/g) ?? []).length;
+    if (inDoc) {
+      if (triples % 2 === 1) inDoc = false; // an odd count closes the docstring
+      return "";
+    }
+    if (triples % 2 === 1) { inDoc = true; return ""; } // opens a multi-line docstring
+    if (triples >= 2) return ""; // a `"""one-line"""` docstring
+    if (isCommentLine(line, PYTHON_COMMENT_MARKERS)) return "";
+    return line;
+  });
+}
 
 function pkgSegmentsOf(relativePath: string): Set<string> {
   return new Set(relativePath.split("/").slice(0, -1));
@@ -106,7 +129,7 @@ export const pythonImportClassifier: ImportStyleClassifier = {
     if (!isAnalyzableSource(file.relativePath)) return [];
     const pkg = pkgSegmentsOf(file.relativePath);
     const tree = cleanTree(file);
-    const lines = tree ? [] : file.content.split("\n");
+    const lines = tree ? [] : stripPyNonCode(file.content.split("\n"));
 
     const out: AxisClassification[] = [];
     const pathStyle = tree ? pathStyleFromAst(tree, pkg) : pathStyleFromRegex(lines, pkg);

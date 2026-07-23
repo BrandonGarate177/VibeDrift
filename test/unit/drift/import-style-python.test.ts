@@ -68,3 +68,16 @@ describe("Python wildcard (py_wildcard)", () => {
     expect(axis(pythonImportClassifier.classify(f), "py_wildcard")[0]?.pattern).toBe("wildcard");
   });
 });
+
+describe("Python regex fallback skips docstrings and comments", () => {
+  it("a `from x import *` inside a docstring is not counted (treeless → regex)", () => {
+    // Without stripping, the docstring wildcard would flip py_wildcard to "wildcard".
+    const f = treeless("m.py", `"""\nfrom legacy import *\n"""\nfrom pkg.a import x\nfrom pkg.b import y\n`);
+    expect(axis(pythonImportClassifier.classify(f), "py_wildcard")[0]?.pattern).toBe("explicit");
+  });
+
+  it("a `from` import inside a `#` comment is not counted", () => {
+    const f = treeless("m.py", `# from legacy import *\nfrom pkg.a import x\nfrom pkg.b import y\n`);
+    expect(axis(pythonImportClassifier.classify(f), "py_wildcard")[0]?.pattern).toBe("explicit");
+  });
+});
