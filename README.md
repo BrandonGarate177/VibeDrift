@@ -141,6 +141,8 @@ questions (`validate_change`, `check_file_drift`, `find_similar_function`) join 
 same tape as ASKS/REPLIES rows, so the whole exchange reads as one dialogue. Use
 `--no-watch` to install without following.
 
+Everything above stays on your machine. To review sessions across machines or with your team, opt into a hosted dashboard with `vibedrift watch-session --sync on`: it uploads a derived-only projection (findings, scores, and outcomes, never your code, prompts, or real file paths) to [vibedrift.ai/dashboard/sessions](https://vibedrift.ai/dashboard/sessions).
+
 ## Deep scan
 
 `vibedrift --deep` adds cloud-powered analysis that local static checks cannot do: semantic duplicate detection, name-versus-behavior intent checks, an in-loop Claude verdict on borderline matches, and a synthesized coherence report graded against your own patterns. The default output summarizes the AI results the scan produced inline (the coherence grade on paid plans, the AI summary, and the top finding); the full AI analysis is in the report and under `--format terminal`. Scope it to your change set with `--diff`:
@@ -156,7 +158,7 @@ Deep scan sends function snippets only (never full files or file paths), process
 
 ## MCP server
 
-VibeDrift ships an MCP server so an AI coding agent can consult your repo's own conventions while it writes — turning drift detection into drift prevention. It exposes six tools — five your agent calls in-loop, plus setup:
+VibeDrift ships an MCP server so an AI coding agent can consult your repo's own conventions while it writes — turning drift detection into drift prevention. It exposes seven tools — five your agent calls in-loop, a setup tool, and one for Drift Sessions:
 
 - `get_intent_hints` reads the conventions your `CLAUDE.md` / `AGENTS.md` / `.cursorrules` declare
 - `get_dominant_pattern` returns the repo's majority pattern for a dimension, with examples to copy
@@ -164,6 +166,7 @@ VibeDrift ships an MCP server so an AI coding agent can consult your repo's own 
 - `find_similar_function` finds an existing near-duplicate so the agent reuses instead of rewriting
 - `validate_change` checks whether a proposed function would introduce drift or duplicate something
 - `init` sets the repo up (writes `.vibedriftignore` and `.vibedrift/config.json`, refreshes the baseline)
+- `respond_to_flag` records the agent's call on a live [Drift Sessions](#drift-sessions-preview) flag (accept, park, or decline) to the local session ledger
 
 These tools run on your machine, send no code, and need no login. They build the repo's baseline automatically on first use. (The `validate_change` and `find_similar_function` tools can opt into a deeper semantic pass, which is the only part that's metered.)
 
