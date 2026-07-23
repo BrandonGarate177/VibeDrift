@@ -1,14 +1,16 @@
 /**
- * JS/TS import-style classifier — axis `path_style` (relative vs alias).
+ * JS/TS import-style classifier — axis `path_style` (relative `./` vs alias `@/`).
  *
- * Ported verbatim from the original `analyzeImports` in `import-consistency.ts`
- * (behavior-preserving). Line-based; the AST rewrite is a later layer.
+ * Handles both ES modules (`import … from "spec"`) and CommonJS
+ * (`require("spec")`). ES-module behavior matches the original `analyzeImports`
+ * (existing findings unchanged); CommonJS specifiers are now counted too.
+ * Line-based; comment lines are skipped. An AST rewrite is a later layer.
  */
 
 import type { DriftFile, Evidence } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
-import { JS_IMPORT_LINE, JS_FROM_SPECIFIER } from "./patterns.js";
+import { JS_IMPORT_LINE, JS_FROM_SPECIFIER, JS_REQUIRE } from "./patterns.js";
 import { EVIDENCE_LIMIT, binaryMajority } from "./shared.js";
 
 export const jsImportClassifier: ImportStyleClassifier = {
@@ -20,25 +22,25 @@ export const jsImportClassifier: ImportStyleClassifier = {
     let aliasCount = 0;
     const evidence: Evidence[] = [];
 
+    // Count a single specifier: relative (./ ../) vs alias (@/ ~/); external /
+    // bare packages have no local path-style choice and are skipped.
+    const record = (spec: string, code: string, lineNo: number) => {
+      if (spec.startsWith("./") || spec.startsWith("../")) relativeCount++;
+      else if (spec.startsWith("@/") || spec.startsWith("~/")) aliasCount++;
+      else return;
+      if (evidence.length < EVIDENCE_LIMIT) evidence.push({ line: lineNo, code });
+    };
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      if (!JS_IMPORT_LINE.test(line)) continue;
-
-      const fromMatch = line.match(JS_FROM_SPECIFIER);
-      if (!fromMatch) continue;
-      const importPath = fromMatch[1];
-
-      // Skip node_modules / external packages.
-      if (!importPath.startsWith(".") && !importPath.startsWith("@/") && !importPath.startsWith("~/")) continue;
-
-      if (importPath.startsWith("./") || importPath.startsWith("../")) {
-        relativeCount++;
-      } else if (importPath.startsWith("@/") || importPath.startsWith("~/")) {
-        aliasCount++;
-      }
-
-      if (evidence.length < EVIDENCE_LIMIT) {
-        evidence.push({ line: i + 1, code: line });
+      if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) continue; // skip comment lines
+      if (JS_IMPORT_LINE.test(line)) {
+        // ES module: import … from "spec"
+        const fromMatch = line.match(JS_FROM_SPECIFIER);
+        if (fromMatch) record(fromMatch[1], line, i + 1);
+      } else {
+        // CommonJS: any number of require("spec") on the line.
+        for (const m of line.matchAll(JS_REQUIRE)) record(m[1], line, i + 1);
       }
     }
 

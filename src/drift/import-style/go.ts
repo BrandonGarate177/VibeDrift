@@ -11,14 +11,15 @@
  * per group so a correctly-grouped file isn't judged across group boundaries.
  * ≥3 imports to decide.
  *
- * AST on a clean parse (`import_spec_list`), regex fallback otherwise.
+ * Handles single-line (`import "x"`), block (`import ( … )`), and multiple
+ * blocks. AST (`import_spec`) on a clean parse, regex fallback otherwise.
  */
 
 import type { Tree } from "../../core/types.js";
 import type { DriftFile } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
-import { GO_IMPORT_BLOCK_START, GO_IMPORT_BLOCK_END, GO_IMPORT_PATH } from "./patterns.js";
+import { GO_IMPORT_BLOCK_START, GO_IMPORT_BLOCK_END, GO_IMPORT_PATH, GO_IMPORT_SINGLE } from "./patterns.js";
 import { cleanTree, capEvidence } from "./shared.js";
 
 interface Spec { row: number; path: string; category: "stdlib" | "external"; code: string; }
@@ -36,21 +37,18 @@ function stripGoQuotes(text: string): string {
   return t;
 }
 
-/** Specs of every block import in the file, in source order. Multiple
- *  `import ( … )` blocks are concatenated; the physical gap between blocks is a
- *  row-gap > 1, so the grouping/ordering axes treat each block as its own group
- *  (which matches gofmt sorting each block independently). */
+/** Every import spec in the file, in source order — whether in a block
+ *  `import ( … )` (one or many blocks) or a single-line `import "x"`. The gap
+ *  between blocks/lines is a row-gap > 1, so grouping/ordering treat each as
+ *  its own group (matching gofmt). */
 function collectAst(tree: Tree): Spec[] {
   const specs: Spec[] = [];
-  for (const list of tree.rootNode.descendantsOfType("import_spec_list")) {
-    if (!list) continue;
-    for (const spec of list.namedChildren) {
-      if (!spec || spec.type !== "import_spec") continue;
-      const pathNode = spec.childForFieldName("path");
-      if (!pathNode) continue;
-      const path = stripGoQuotes(pathNode.text);
-      specs.push({ row: spec.startPosition.row, path, category: goCategory(path), code: spec.text.trim() });
-    }
+  for (const spec of tree.rootNode.descendantsOfType("import_spec")) {
+    if (!spec) continue;
+    const pathNode = spec.childForFieldName("path");
+    if (!pathNode) continue;
+    const path = stripGoQuotes(pathNode.text);
+    specs.push({ row: spec.startPosition.row, path, category: goCategory(path), code: spec.text.trim() });
   }
   return specs.sort((a, b) => a.row - b.row);
 }
@@ -60,15 +58,16 @@ function collectRegex(content: string): Spec[] {
   const specs: Spec[] = [];
   let inBlock = false;
   for (let i = 0; i < lines.length; i++) {
-    if (!inBlock) {
-      if (GO_IMPORT_BLOCK_START.test(lines[i])) inBlock = true;
-      continue;
+    if (inBlock) {
+      if (GO_IMPORT_BLOCK_END.test(lines[i])) { inBlock = false; continue; }
+      const m = lines[i].match(GO_IMPORT_PATH);
+      if (m) specs.push({ row: i, path: m[1] ?? m[2], category: goCategory(m[1] ?? m[2]), code: lines[i].trim() });
+    } else if (GO_IMPORT_BLOCK_START.test(lines[i])) {
+      inBlock = true;
+    } else {
+      const s = lines[i].match(GO_IMPORT_SINGLE);
+      if (s) specs.push({ row: i, path: s[1], category: goCategory(s[1]), code: lines[i].trim() });
     }
-    if (GO_IMPORT_BLOCK_END.test(lines[i])) { inBlock = false; continue; }
-    const m = lines[i].match(GO_IMPORT_PATH);
-    if (!m) continue;
-    const path = m[1] ?? m[2];
-    specs.push({ row: i, path, category: goCategory(path), code: lines[i].trim() });
   }
   return specs;
 }

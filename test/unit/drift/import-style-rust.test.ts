@@ -118,3 +118,16 @@ describe("Rust relative-glob idioms are excluded (precision)", () => {
     expect(axis(rustImportClassifier.classify(f), "rust_use_path")[0]?.pattern).toBe("crate");
   });
 });
+
+
+describe("Rust prelude globs excluded; crate-root glob kept (precision)", () => {
+  it("rust_glob: `use …::prelude::*;` is idiomatic and not counted as a glob", () => {
+    const f = treeless("src/a.rs", `use rayon::prelude::*;\nuse crate::foo::Bar;\nuse crate::baz::Qux;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+
+  it("rust_glob: `use crate::*;` (crate-root glob) is still flagged as a glob", () => {
+    const f = treeless("src/a.rs", `use crate::*;\nuse crate::foo::Bar;\nuse crate::baz::Qux;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
+  });
+});

@@ -100,3 +100,23 @@ describe("Go multiple import blocks", () => {
     expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("grouped");
   });
 });
+
+
+describe("Go single-line imports", () => {
+  it("AST: multiple single-line imports are read (grouping decides)", async () => {
+    // stdlib + external as separate `import "x"` lines, no blank → flat.
+    const f = await go("s.go", `package main\n\nimport "fmt"\nimport "github.com/gin-gonic/gin"\n`);
+    expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("flat");
+  });
+
+  it("AST: ordering is checked across single-line imports", async () => {
+    // 3 single-line stdlib imports, out of byte order (os before bytes).
+    const f = await go("s2.go", `package main\n\nimport "fmt"\nimport "os"\nimport "bytes"\n`);
+    expect(axis(goImportClassifier.classify(f), "go_ordering")[0]?.pattern).toBe("unordered");
+  });
+
+  it("regex fallback: single-line imports are read", () => {
+    const f = treeless("s.go", `package main\n\nimport "fmt"\nimport "github.com/gin-gonic/gin"\n`);
+    expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("flat");
+  });
+});

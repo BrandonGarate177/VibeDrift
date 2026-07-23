@@ -10,6 +10,9 @@
 export const JS_IMPORT_LINE = /^import\s+(?!type\s)/;
 /** The module specifier in a `from "..."` / `from '...'` clause → capture [1]. */
 export const JS_FROM_SPECIFIER = /from\s+["']([^"']+)["']/;
+/** A CommonJS `require("…")` / `require('…')` call → capture [1] = specifier.
+ *  Global (for `matchAll`) — a line may hold more than one require. */
+export const JS_REQUIRE = /require\(\s*["']([^"']+)["']\s*\)/g;
 
 // ─── Go (regex fallback for the `grouping` axis) ───
 
@@ -19,6 +22,9 @@ export const GO_IMPORT_BLOCK_START = /^\s*import\s*\(/;
 export const GO_IMPORT_BLOCK_END = /^\s*\)/;
 /** A quoted import path inside a spec line → capture [1] (double) or [2] (raw backtick). */
 export const GO_IMPORT_PATH = /"([^"]+)"|`([^`]+)`/;
+/** A single-line import: `import "fmt"`, `import _ "x"`, `import . "x"`,
+ *  `import alias "x"` → capture [1] = path. Never matches `import (`. */
+export const GO_IMPORT_SINGLE = /^\s*import\s+(?:(?:[A-Za-z_]\w*|\.|_)\s+)?["`]([^"`]+)["`]/;
 
 // ─── Python (path_style axis) ───
 

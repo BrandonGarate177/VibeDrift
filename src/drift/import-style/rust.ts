@@ -1,10 +1,10 @@
 /**
  * Rust import-style classifier — axes `rust_glob`, `rust_use_path`, `rust_grouping`.
  *
- * `rust_glob`: glob (`use foo::bar::*;`) vs explicit paths. Relative globs
- * (`use super::*;` / `use self::…::*`) are idiomatic Rust — test-module
- * re-imports and enum-variant scoping — not the namespace-glob anti-pattern,
- * so they're excluded. Decidable with a (non-relative) glob present or ≥2 uses.
+ * `rust_glob`: glob (`use foo::bar::*;`) vs explicit paths. Idiomatic globs are
+ * excluded — relative (`use super::*;`, `use self::…::*;`) and external preludes
+ * (`use rayon::prelude::*;`); crate-root and crate-internal globs stay flagged.
+ * Decidable with a (non-idiomatic) glob present or ≥2 uses.
  *
  * `rust_use_path`: intra-crate refs written absolute (`use crate::…`) vs
  * relative (`use super::…` / `use self::…`). External-crate uses (`std`,
@@ -40,19 +40,23 @@ function collectUses(file: DriftFile): UseRow[] {
   return rows;
 }
 
-/** A relative glob — `use super::*;` / `use self::*;` (incl. `use self::Enum::*`).
- *  Idiomatic Rust (test-module re-imports, enum-variant scoping), not the
- *  namespace-glob anti-pattern, so the glob and use-path axes ignore them. */
-function isRelativeGlob(text: string): boolean {
+/** Idiomatic globs — NOT the namespace-glob anti-pattern, so the glob/use-path
+ *  axes ignore them:
+ *   - relative: `use super::*;` (test re-imports), `use self::…::*;` (enum scoping)
+ *   - external prelude: `use rayon::prelude::*;`, `use std::prelude::*;` (preludes
+ *     from other crates/std are designed to be glob-imported)
+ *  Crate-root (`use crate::*;`) and crate-internal (`use crate::prelude::*;`)
+ *  globs are deliberate local choices and stay flagged. */
+function isIdiomaticGlob(text: string): boolean {
   if (!RUST_USE_GLOB.test(text)) return false;
   const head = text.match(RUST_USE_HEAD)?.[1];
-  return head === "super" || head === "self";
+  if (head === "super" || head === "self") return true;
+  return head !== "crate" && /\bprelude\b/.test(text);
 }
 
 function glob(rows: UseRow[]): AxisClassification | null {
-  // Idiomatic relative globs are neither the glob anti-pattern nor "explicit" —
-  // drop them from the axis entirely.
-  const relevant = rows.filter((r) => !isRelativeGlob(r.text));
+  // Idiomatic globs are neither the glob anti-pattern nor "explicit" — drop them.
+  const relevant = rows.filter((r) => !isIdiomaticGlob(r.text));
   const globRows = relevant.filter((r) => RUST_USE_GLOB.test(r.text));
   if (globRows.length === 0 && relevant.length < 2) return null;
   const evidence = capEvidence((globRows.length > 0 ? globRows : relevant).map((r) => ({ line: r.line, code: r.text })));
@@ -64,7 +68,7 @@ function usePath(rows: UseRow[]): AxisClassification | null {
   let relative = 0;
   const evidence: Evidence[] = [];
   for (const r of rows) {
-    if (isRelativeGlob(r.text)) continue; // idiomatic test/enum glob — not a considered path-style choice
+    if (isIdiomaticGlob(r.text)) continue; // idiomatic glob — not a considered path-style choice
     const head = r.text.match(RUST_USE_HEAD)?.[1];
     const kind = head === "crate" ? "crate" : (head === "super" || head === "self") ? "relative" : null;
     if (!kind) continue; // external crate — neutral
