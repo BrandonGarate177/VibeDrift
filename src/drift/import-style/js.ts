@@ -40,8 +40,11 @@ export const jsImportClassifier: ImportStyleClassifier = {
         const fromMatch = line.match(JS_FROM_SPECIFIER);
         if (fromMatch) record(fromMatch[1], line, i + 1);
       } else {
-        // CommonJS: any number of require("spec") on the line.
-        for (const m of line.matchAll(JS_REQUIRE)) record(m[1], line, i + 1);
+        // CommonJS: require("spec"). Strip a trailing `//` line comment first so
+        // a `// … require("x")` note isn't counted as an import. `(?<!:)` keeps
+        // `http://…` intact; whole-line comments were already skipped above.
+        const code = line.split(/(?<!:)\/\//)[0];
+        for (const m of code.matchAll(JS_REQUIRE)) record(m[1], line, i + 1);
       }
     }
 

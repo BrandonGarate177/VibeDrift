@@ -40,4 +40,10 @@ describe("JS/TS import path style (path_style)", () => {
     const f = js("src/a.js", `// const a = require("./a");\n// const b = require("./b");\nconst c = require("./c");\n`);
     expect(jsImportClassifier.classify(f)).toEqual([]);
   });
+
+  it("does not count require() inside a trailing comment", () => {
+    // require() in an end-of-line comment must not be counted as a real import.
+    const f = js("src/a.js", `const a = load("x"); // was require("./legacy-a")\nconst b = load("y"); // require("./legacy-b")\nconst c = load("z"); // require("./legacy-c")\n`);
+    expect(jsImportClassifier.classify(f)).toEqual([]);
+  });
 });
