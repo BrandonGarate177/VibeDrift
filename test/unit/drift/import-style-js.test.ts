@@ -47,3 +47,20 @@ describe("JS/TS import path style (path_style)", () => {
     expect(jsImportClassifier.classify(f)).toEqual([]);
   });
 });
+
+describe("JS/TS path_style arms (each held in place by a test)", () => {
+  it("`import type` is excluded — does not count toward the threshold", () => {
+    const f = js("src/a.ts", `import type { A } from "./a";\nimport type { B } from "./b";\nimport type { C } from "./c";\n`);
+    expect(jsImportClassifier.classify(f)).toEqual([]);
+  });
+
+  it("parent-relative (`../`) counts as relative", () => {
+    const f = js("src/a.ts", `import a from "../a";\nimport b from "../b";\nimport c from "../c";\n`);
+    expect(jsImportClassifier.classify(f)[0]?.pattern).toBe("relative");
+  });
+
+  it("tilde alias (`~/`) counts as alias", () => {
+    const f = js("src/a.ts", `import a from "~/a";\nimport b from "~/b";\nimport c from "~/c";\n`);
+    expect(jsImportClassifier.classify(f)[0]?.pattern).toBe("alias");
+  });
+});

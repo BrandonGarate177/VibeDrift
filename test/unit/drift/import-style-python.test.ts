@@ -81,3 +81,13 @@ describe("Python regex fallback skips docstrings and comments", () => {
     expect(axis(pythonImportClassifier.classify(f), "py_wildcard")[0]?.pattern).toBe("explicit");
   });
 });
+
+
+describe("Python path_style ignores third-party imports (regex fallback)", () => {
+  it("a treeless file with only third-party from-imports stays silent", () => {
+    // Neither `os` nor `django` is a segment of the file's own path, so the
+    // pkg.has(...) gate keeps them out of the vote — no py_path_style finding.
+    const f = treeless("app/views.py", `from os import path\nfrom django.db import models\n`);
+    expect(axis(pythonImportClassifier.classify(f), "py_path_style")).toEqual([]);
+  });
+});
