@@ -4,6 +4,19 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Added
+
+- **Import-style drift now covers Go, Python, and Rust** (previously JS/TS only). The
+  `import-consistency` detector is now a language-agnostic, per-axis core with one classifier
+  per language: Go import grouping + gofmt ordering; Python absolute-vs-relative paths +
+  wildcard imports; Rust glob / intra-crate-path (`crate::` vs `super::`/`self::`) / use-grouping
+  conventions. Each axis is voted independently (directory-scoped dominance + entropy gate), so a
+  file can be consistent on one dimension and drift on another. JS/TS behavior is unchanged and
+  now also reads CommonJS `require()` alongside ES imports. Idiomatic Rust globs (`use super::*;`
+  in tests, external `::prelude::*`) are excluded to avoid false positives. Closes #56.
+
 ## 0.17.0 — 2026-07-23
 
 ### Added
@@ -36,17 +49,6 @@ explicitly under **Breaking** so CI users can recalibrate.
   reads a local entitlement cache. Recorded local ledgers always remain yours.
 
 ## 0.16.3 — 2026-07-22
-
-### Added
-
-- **Import-style drift now covers Go, Python, and Rust** (previously JS/TS only). The
-  `import-consistency` detector is now a language-agnostic, per-axis core with one classifier
-  per language: Go import grouping + gofmt ordering; Python absolute-vs-relative paths +
-  wildcard imports; Rust glob / intra-crate-path (`crate::` vs `super::`/`self::`) / use-grouping
-  conventions. Each axis is voted independently (directory-scoped dominance + entropy gate), so a
-  file can be consistent on one dimension and drift on another. JS/TS behavior is unchanged and
-  now also reads CommonJS `require()` alongside ES imports. Idiomatic Rust globs (`use super::*;`
-  in tests, external `::prelude::*`) are excluded to avoid false positives. Closes #56.
 
 ### Fixed
 

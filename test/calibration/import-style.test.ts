@@ -15,8 +15,12 @@ import type { DriftContext } from "../../src/drift/types.js";
 import type { SupportedLanguage } from "../../src/core/types.js";
 import {
   goGroupingMixed, goGroupingSplit, goDeviatorPath,
+  goOrderingMixed, goOrderingSplit, goOrderingDeviatorPath,
   pyPathStyleMixed, pyPathStyleSplit, pyDeviatorPath,
+  pyWildcardMixed, pyWildcardSplit, pyWildcardDeviatorPath,
   rustGlobMixed, rustGlobSplit, rustDeviatorPath,
+  rustUsePathMixed, rustUsePathSplit, rustUsePathDeviatorPath,
+  rustGroupingMixed, rustGroupingSplit, rustGroupingDeviatorPath,
 } from "./import-style-fixture.js";
 
 async function ctxFor(files: BaselineFile[], lang: SupportedLanguage): Promise<DriftContext> {
@@ -34,8 +38,12 @@ function forAxis(ctx: DriftContext, sub: string) {
 
 const CASES = [
   { name: "Go grouping", axis: "go_grouping", dominant: "grouped", mixed: goGroupingMixed, split: goGroupingSplit, deviator: goDeviatorPath, lang: "go" as const },
+  { name: "Go ordering", axis: "go_ordering", dominant: "sorted", mixed: goOrderingMixed, split: goOrderingSplit, deviator: goOrderingDeviatorPath, lang: "go" as const },
   { name: "Python path style", axis: "py_path_style", dominant: "relative", mixed: pyPathStyleMixed, split: pyPathStyleSplit, deviator: pyDeviatorPath, lang: "python" as const },
+  { name: "Python wildcard", axis: "py_wildcard", dominant: "explicit", mixed: pyWildcardMixed, split: pyWildcardSplit, deviator: pyWildcardDeviatorPath, lang: "python" as const },
   { name: "Rust glob", axis: "rust_glob", dominant: "explicit", mixed: rustGlobMixed, split: rustGlobSplit, deviator: rustDeviatorPath, lang: "rust" as const },
+  { name: "Rust use path", axis: "rust_use_path", dominant: "crate", mixed: rustUsePathMixed, split: rustUsePathSplit, deviator: rustUsePathDeviatorPath, lang: "rust" as const },
+  { name: "Rust grouping", axis: "rust_grouping", dominant: "grouped", mixed: rustGroupingMixed, split: rustGroupingSplit, deviator: rustGroupingDeviatorPath, lang: "rust" as const },
 ];
 
 for (const c of CASES) {
