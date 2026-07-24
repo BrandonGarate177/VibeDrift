@@ -21,27 +21,18 @@ import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { PY_FROM_RELATIVE, PY_FROM_ABSOLUTE, PY_FROM_ANY, PY_WILDCARD } from "./patterns.js";
 import { EVIDENCE_LIMIT, capEvidence, cleanTree, binaryMajority } from "./shared.js";
-import { isCommentLine, PYTHON_COMMENT_MARKERS } from "../comment-markers.js";
+import { pythonNonCodeLines } from "../comment-markers.js";
 
 /**
  * Blank out `#` comment lines and triple-quoted docstring bodies so the
  * from-import regexes never match an import that only appears inside a comment
  * or a docstring. Regex-fallback only — the AST path is already immune
- * (a docstring is a string literal, not an `import_from_statement`).
+ * (a docstring is a string literal, not an `import_from_statement`). Docstring/
+ * comment detection is shared with route-extractors via `pythonNonCodeLines`.
  */
 function stripPyNonCode(lines: string[]): string[] {
-  let inDoc = false;
-  return lines.map((line) => {
-    const triples = (line.match(/"""|'''/g) ?? []).length;
-    if (inDoc) {
-      if (triples % 2 === 1) inDoc = false; // an odd count closes the docstring
-      return "";
-    }
-    if (triples % 2 === 1) { inDoc = true; return ""; } // opens a multi-line docstring
-    if (triples >= 2) return ""; // a `"""one-line"""` docstring
-    if (isCommentLine(line, PYTHON_COMMENT_MARKERS)) return "";
-    return line;
-  });
+  const nonCode = pythonNonCodeLines(lines);
+  return lines.map((line, i) => (nonCode[i] ? "" : line));
 }
 
 function pkgSegmentsOf(relativePath: string): Set<string> {

@@ -18,7 +18,7 @@ export const MUTATION_METHODS = [...SECURITY_AST.MUTATING].map((m) => m.toUpperC
 // Comment-line detection is shared with the import-style classifiers, so it
 // lives in comment-markers.ts (single source of truth) and is re-exported here
 // — the per-language route extractors keep importing it from ./shared.js.
-export { C_STYLE_COMMENT_MARKERS, PYTHON_COMMENT_MARKERS, isCommentLine } from "../comment-markers.js";
+export { C_STYLE_COMMENT_MARKERS, PYTHON_COMMENT_MARKERS, isCommentLine, pythonNonCodeLines } from "../comment-markers.js";
 
 // ─── Phase 2: inheritance resolution ─────────────────────────────────
 // A route's effective protection is its per-route middleware UNION the

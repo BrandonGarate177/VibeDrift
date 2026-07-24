@@ -10,8 +10,7 @@ import { extractPythonRoutesAst } from "../security-ast-python.js";
 import type { RouteInfo, FileMiddleware, RouteExtractor } from "./types.js";
 import {
   MUTATION_METHODS,
-  PYTHON_COMMENT_MARKERS,
-  isCommentLine,
+  pythonNonCodeLines,
   inheritedAuth,
   inheritedValidation,
   inheritedRateLimit,
@@ -78,20 +77,12 @@ function extractPythonRoutesRegex(file: DriftFile, fileMiddleware: FileMiddlewar
   const routes: RouteInfo[] = [];
   const lines = file.content.split("\n");
 
-  let inDocstring = false;
+  // `#` comments and triple-quoted docstring bodies are non-code: a route-shaped
+  // line inside one is documentation, not a real registration. Shared with the
+  // import-style fallback so the two agree (incl. one-line docstrings).
+  const nonCode = pythonNonCodeLines(lines);
   for (let i = 0; i < lines.length; i++) {
-    // Track triple-quoted docstring blocks: a route-shaped line inside a
-    // docstring is documentation, not a real registration. An odd count of
-    // triple-quotes on a line toggles the block state.
-    const tripleQuotes = (lines[i].match(/"""|'''/g) ?? []).length;
-    if (inDocstring) {
-      if (tripleQuotes % 2 === 1) inDocstring = false;
-      continue;
-    }
-    if (tripleQuotes % 2 === 1) { inDocstring = true; continue; }
-    // Skip comment lines — Python uses '#'. Prevents phantom routes from
-    // commented-out code.
-    if (isCommentLine(lines[i], PYTHON_COMMENT_MARKERS)) continue;
+    if (nonCode[i]) continue;
     const match = lines[i].match(PY_ROUTE);
     if (!match) continue;
     const path = match[1];

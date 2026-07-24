@@ -19,3 +19,32 @@ export function isCommentLine(line: string, markers: readonly string[]): boolean
   const trimmed = line.trimStart();
   return markers.some((m) => trimmed.startsWith(m));
 }
+
+/**
+ * Mark which Python lines are "non-code" — `#` comments and triple-quoted
+ * docstring/string bodies (including a one-line `"""x"""`) — so the line-based
+ * regex fallbacks skip imports or routes that only appear inside a comment or a
+ * docstring. Shared by import-style and route-extractors so the two fallbacks
+ * agree (they previously disagreed on one-line docstrings). Returns a boolean
+ * per input line, `true` = non-code.
+ *
+ * Fallback-only heuristic (the AST paths are exact): an odd number of triple-
+ * quotes on a line toggles docstring state; an even count of ≥2 is a one-line
+ * docstring.
+ */
+export function pythonNonCodeLines(lines: string[]): boolean[] {
+  const flags: boolean[] = [];
+  let inDoc = false;
+  for (const line of lines) {
+    const triples = (line.match(/"""|'''/g) ?? []).length;
+    if (inDoc) {
+      flags.push(true);
+      if (triples % 2 === 1) inDoc = false; // an odd count closes the docstring
+      continue;
+    }
+    if (triples % 2 === 1) { inDoc = true; flags.push(true); continue; } // opens a multi-line docstring
+    if (triples >= 2) { flags.push(true); continue; } // a `"""one-line"""` docstring
+    flags.push(isCommentLine(line, PYTHON_COMMENT_MARKERS));
+  }
+  return flags;
+}
