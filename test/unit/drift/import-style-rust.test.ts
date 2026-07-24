@@ -131,3 +131,32 @@ describe("Rust prelude globs excluded; crate-root glob kept (precision)", () => 
     expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
   });
 });
+
+describe("Rust grouping: blank line vs wrapped/commented uses", () => {
+  it("a rustfmt-wrapped multiline use does not fake a group (stays flat)", async () => {
+    const f = await rs("src/a.rs", `use std::collections::{\n    HashMap,\n    HashSet,\n};\nuse crate::foo::Bar;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("flat");
+  });
+
+  it("a comment between uses does not fake a group (stays flat)", async () => {
+    const f = await rs("src/a.rs", `use std::fmt::Debug;\n// note\nuse crate::foo::Bar;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("flat");
+  });
+
+  it("a real blank line still marks a group", async () => {
+    const f = await rs("src/a.rs", `use std::fmt::Debug;\n\nuse crate::foo::Bar;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("grouped");
+  });
+});
+
+describe("Rust visibility prefixes (pub(crate) etc.)", () => {
+  it("rust_use_path counts `pub(crate) use` (regex fallback)", () => {
+    const f = treeless("src/a.rs", `pub(crate) use crate::a::B;\npub(crate) use crate::c::D;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")[0]?.pattern).toBe("crate");
+  });
+
+  it("`pub(crate) use super::*;` is still an idiomatic glob, not flagged (AST)", async () => {
+    const f = await rs("src/a.rs", `pub(crate) use super::*;\nuse crate::a::B;\nuse crate::c::D;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+});

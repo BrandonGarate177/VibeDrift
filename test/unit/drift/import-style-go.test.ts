@@ -130,3 +130,27 @@ describe("Go regex fallback skips commented import paths", () => {
     expect(axis(goImportClassifier.classify(f), "go_grouping")).toEqual([]);
   });
 });
+
+describe("Go grouping edge cases (blank line vs comment / one-line block)", () => {
+  it("AST: a comment between imports does not fake a group (stays flat)", async () => {
+    const f = await go("c.go", `package main\n\nimport (\n\t"fmt"\n\t// helpers\n\t"github.com/pkg/errors"\n)\n`);
+    expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("flat");
+  });
+
+  it("regex fallback: a comment between imports stays flat", () => {
+    const f = treeless("c.go", `package main\n\nimport (\n\t"fmt"\n\t// helpers\n\t"github.com/pkg/errors"\n)\n`);
+    expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("flat");
+  });
+
+  it("regex fallback: a one-line block does not slurp later quoted strings", () => {
+    // `import ( "fmt" )` must capture fmt and close on the same line — otherwise
+    // every later quoted string (a URL, a fmt.Println arg) becomes a phantom spec.
+    const f = treeless("c.go", `package main\n\nimport ( "fmt" )\n\nfunc main() {\n\ta := "github.com/x/y"\n\tb := "os"\n\tfmt.Println("hi")\n}\n`);
+    expect(axis(goImportClassifier.classify(f), "go_grouping")).toEqual([]);
+  });
+
+  it("regex fallback: single-line `import _ \"pkg\"` (blank identifier) is read", () => {
+    const f = treeless("c.go", `package main\n\nimport _ "github.com/lib/pq"\nimport "fmt"\n`);
+    expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("flat");
+  });
+});

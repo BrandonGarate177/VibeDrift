@@ -39,9 +39,9 @@ function stripGoQuotes(text: string): string {
 }
 
 /** Every import spec in the file, in source order — whether in a block
- *  `import ( … )` (one or many blocks) or a single-line `import "x"`. The gap
- *  between blocks/lines is a row-gap > 1, so grouping/ordering treat each as
- *  its own group (matching gofmt). */
+ *  `import ( … )` (one or many blocks) or a single-line `import "x"`. Grouping
+ *  and ordering decide group boundaries by a genuine blank line between specs
+ *  (see `blankBetween`), matching gofmt (comments attach to the next spec). */
 function collectAst(tree: Tree): Spec[] {
   const specs: Spec[] = [];
   for (const spec of tree.rootNode.descendantsOfType("import_spec")) {
@@ -66,6 +66,13 @@ function collectRegex(content: string): Spec[] {
       if (m) specs.push({ row: i, path: m[1] ?? m[2], category: goCategory(m[1] ?? m[2]), code: lines[i].trim() });
     } else if (GO_IMPORT_BLOCK_START.test(lines[i])) {
       inBlock = true;
+      // A one-line block like `import ( "fmt" )`: capture the path and, if the
+      // closing `)` is on the same line, close the block immediately — otherwise
+      // inBlock stays open and every later quoted string is slurped as a spec.
+      const rest = lines[i].replace(GO_IMPORT_BLOCK_START, "");
+      const m = rest.match(GO_IMPORT_PATH);
+      if (m) specs.push({ row: i, path: m[1] ?? m[2], category: goCategory(m[1] ?? m[2]), code: lines[i].trim() });
+      if (rest.includes(")")) inBlock = false;
     } else {
       const s = lines[i].match(GO_IMPORT_SINGLE);
       if (s) specs.push({ row: i, path: s[1], category: goCategory(s[1]), code: lines[i].trim() });
@@ -78,23 +85,33 @@ function evidenceOf(specs: Spec[]): { line: number; code: string }[] {
   return capEvidence(specs.map((s) => ({ line: s.row + 1, code: s.code })));
 }
 
-function grouping(specs: Spec[]): AxisClassification | null {
+/** True if a genuinely blank line separates two specs. gofmt attaches comments
+ *  to the following spec, so only a blank line — not a comment or wrapped line —
+ *  delimits a group. Rows are 0-based line indices into `lines`. */
+function blankBetween(lines: string[], prevRow: number, row: number): boolean {
+  for (let l = prevRow + 1; l < row; l++) {
+    if ((lines[l] ?? "").trim() === "") return true;
+  }
+  return false;
+}
+
+function grouping(specs: Spec[], lines: string[]): AxisClassification | null {
   if (specs.length < 2) return null;
   if (new Set(specs.map((s) => s.category)).size < 2) return null;
   let grouped = false;
   for (let i = 1; i < specs.length; i++) {
-    if (specs[i].row - specs[i - 1].row > 1) { grouped = true; break; }
+    if (blankBetween(lines, specs[i - 1].row, specs[i].row)) { grouped = true; break; }
   }
   return { axis: "go_grouping", pattern: grouped ? "grouped" : "flat", evidence: evidenceOf(specs) };
 }
 
-function ordering(specs: Spec[]): AxisClassification | null {
+function ordering(specs: Spec[], lines: string[]): AxisClassification | null {
   if (specs.length < 3) return null;
   // Check each blank-line-delimited group is byte-ascending on its own.
   let ordered = true;
   let groupStart = 0;
   for (let i = 1; i <= specs.length && ordered; i++) {
-    const boundary = i === specs.length || specs[i].row - specs[i - 1].row > 1;
+    const boundary = i === specs.length || blankBetween(lines, specs[i - 1].row, specs[i].row);
     if (!boundary) continue;
     for (let j = groupStart + 1; j < i; j++) {
       if (specs[j].path < specs[j - 1].path) { ordered = false; break; }
@@ -109,10 +126,11 @@ export const goImportClassifier: ImportStyleClassifier = {
     if (!isAnalyzableSource(file.relativePath)) return [];
     const tree = cleanTree(file);
     const specs = tree ? collectAst(tree) : collectRegex(file.content);
+    const lines = file.content.split("\n");
     const out: AxisClassification[] = [];
-    const g = grouping(specs);
+    const g = grouping(specs, lines);
     if (g) out.push(g);
-    const o = ordering(specs);
+    const o = ordering(specs, lines);
     if (o) out.push(o);
     return out;
   },

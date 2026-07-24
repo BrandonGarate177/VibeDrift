@@ -39,9 +39,11 @@ export const PY_WILDCARD = /^\s*from\s+\S+\s+import\s+\*/;
 
 // ─── Rust (glob + use-path-style axes) ───
 
-/** A `use` declaration line (optionally `pub use`). */
-export const RUST_USE = /^\s*(?:pub\s+)?use\s+/;
+/** A `use` declaration line, optionally with any visibility — `pub use`,
+ *  `pub(crate) use`, `pub(super) use`, `pub(in path) use`. */
+export const RUST_USE = /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+/;
 /** A glob `use` — `use …::*`. */
 export const RUST_USE_GLOB = /use\s[^;]*::\*/;
-/** The head segment of a `use` path → capture [1] (`crate` | `super` | `self` | a crate name). */
-export const RUST_USE_HEAD = /^\s*(?:pub\s+)?use\s+(\w+)/;
+/** The head segment of a `use` path → capture [1] (`crate` | `super` | `self` | a crate name).
+ *  Tolerates any visibility prefix (`pub`, `pub(crate)`, …). */
+export const RUST_USE_HEAD = /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+(\w+)/;

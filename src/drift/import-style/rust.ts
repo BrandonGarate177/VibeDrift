@@ -20,24 +20,35 @@ import { isAnalyzableSource } from "../utils.js";
 import { RUST_USE, RUST_USE_GLOB, RUST_USE_HEAD } from "./patterns.js";
 import { EVIDENCE_LIMIT, capEvidence, cleanTree, binaryMajority } from "./shared.js";
 
-interface UseRow { line: number; text: string; }
+interface UseRow { start: number; end: number; text: string; } // 0-based start/end rows
 
-/** Collect one row per `use` declaration (line number + single-line text). */
+/** Collect one row per `use` declaration: start/end line (multiline uses span
+ *  several rows) plus the single-line text of the head. */
 function collectUses(file: DriftFile): UseRow[] {
   const rows: UseRow[] = [];
   const tree = cleanTree(file);
   if (tree) {
     for (const u of tree.rootNode.descendantsOfType("use_declaration")) {
       if (!u) continue;
-      rows.push({ line: u.startPosition.row + 1, text: u.text.split("\n")[0].trim() });
+      rows.push({ start: u.startPosition.row, end: u.endPosition.row, text: u.text.split("\n")[0].trim() });
     }
   } else {
     const lines = file.content.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      if (RUST_USE.test(lines[i])) rows.push({ line: i + 1, text: lines[i].trim() });
+      if (RUST_USE.test(lines[i])) rows.push({ start: i, end: i, text: lines[i].trim() });
     }
   }
   return rows;
+}
+
+/** True if a genuinely blank line separates two declarations. Measured from the
+ *  previous declaration's END row, so a rustfmt-wrapped multiline `use` (and any
+ *  comment or `#[cfg]` attribute between uses) doesn't fake a group boundary. */
+function blankBetween(lines: string[], prevEnd: number, start: number): boolean {
+  for (let l = prevEnd + 1; l < start; l++) {
+    if ((lines[l] ?? "").trim() === "") return true;
+  }
+  return false;
 }
 
 /** Idiomatic globs — NOT the namespace-glob anti-pattern, so the glob/use-path
@@ -59,7 +70,7 @@ function glob(rows: UseRow[]): AxisClassification | null {
   const relevant = rows.filter((r) => !isIdiomaticGlob(r.text));
   const globRows = relevant.filter((r) => RUST_USE_GLOB.test(r.text));
   if (globRows.length === 0 && relevant.length < 2) return null;
-  const evidence = capEvidence((globRows.length > 0 ? globRows : relevant).map((r) => ({ line: r.line, code: r.text })));
+  const evidence = capEvidence((globRows.length > 0 ? globRows : relevant).map((r) => ({ line: r.start + 1, code: r.text })));
   return { axis: "rust_glob", pattern: globRows.length > 0 ? "glob" : "explicit", evidence };
 }
 
@@ -73,7 +84,7 @@ function usePath(rows: UseRow[]): AxisClassification | null {
     const kind = head === "crate" ? "crate" : (head === "super" || head === "self") ? "relative" : null;
     if (!kind) continue; // external crate — neutral
     if (kind === "crate") crate++; else relative++;
-    if (evidence.length < EVIDENCE_LIMIT) evidence.push({ line: r.line, code: r.text });
+    if (evidence.length < EVIDENCE_LIMIT) evidence.push({ line: r.start + 1, code: r.text });
   }
   if (crate + relative < 2) return null;
   const pattern = binaryMajority(crate, "crate", relative, "relative");
@@ -97,16 +108,16 @@ function useOrigin(text: string): Origin | null {
  *  together (`flat`)? Only files spanning ≥2 origins are judged, so a
  *  single-origin file is never a false deviator. Note: rustfmt does not enforce
  *  import grouping by default, so this is a softer convention than gofmt's. */
-function grouping(rows: UseRow[]): AxisClassification | null {
+function grouping(rows: UseRow[], lines: string[]): AxisClassification | null {
   if (rows.length < 2) return null;
   const origins = new Set(rows.map((r) => useOrigin(r.text)).filter((o): o is Origin => o !== null));
   if (origins.size < 2) return null;
-  const sorted = [...rows].sort((a, b) => a.line - b.line);
+  const sorted = [...rows].sort((a, b) => a.start - b.start);
   let grouped = false;
   for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].line - sorted[i - 1].line > 1) { grouped = true; break; }
+    if (blankBetween(lines, sorted[i - 1].end, sorted[i].start)) { grouped = true; break; }
   }
-  const evidence = capEvidence(sorted.map((r) => ({ line: r.line, code: r.text })));
+  const evidence = capEvidence(sorted.map((r) => ({ line: r.start + 1, code: r.text })));
   return { axis: "rust_grouping", pattern: grouped ? "grouped" : "flat", evidence };
 }
 
@@ -114,12 +125,13 @@ export const rustImportClassifier: ImportStyleClassifier = {
   classify(file: DriftFile): AxisClassification[] {
     if (!isAnalyzableSource(file.relativePath)) return [];
     const rows = collectUses(file);
+    const lines = file.content.split("\n");
     const out: AxisClassification[] = [];
     const g = glob(rows);
     if (g) out.push(g);
     const u = usePath(rows);
     if (u) out.push(u);
-    const gr = grouping(rows);
+    const gr = grouping(rows, lines);
     if (gr) out.push(gr);
     return out;
   },
