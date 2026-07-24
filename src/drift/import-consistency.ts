@@ -40,6 +40,12 @@ interface AxisProfile {
   patterns: { pattern: string; evidence: Evidence[] }[];
 }
 
+/** Upper-case the first character — turns an axis `label` into its per-directory
+ *  finding headline (e.g. "import path style" → "Import path style"). */
+function capitalizeFirst(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export const importConsistency: DriftDetector = {
   id: "import-consistency",
   name: "Import Style Consistency",
@@ -60,18 +66,21 @@ export const importConsistency: DriftDetector = {
 
     const findings: DriftFinding[] = [];
     const fileAges = buildFileAgeMap(ctx);
-    // The import_style intent hint's vocabulary (e.g. "alias"/"relative") only
-    // describes the axis it names, so it is applied per-axis below — never as a
-    // blanket seed across unrelated axes (which would inject a phantom pattern
-    // and bypass the dominance threshold on, say, go_grouping).
+    // The `import_style` intent hint's vocabulary (`alias`/`relative`) describes
+    // only the JS/TS `path_style` axis, so it binds there and nowhere else.
+    // Binding by pattern-key membership would leak: `relative` is also a key on
+    // `py_path_style` and `rust_use_path`, and because a seeded vote skips the
+    // dominance threshold, a JS-flavored "use relative imports" hint would emit
+    // zero-deviator findings on unrelated Python/Rust directories.
+    const HINT_AXIS: Axis = "path_style";
     const hintPattern = pickIntentHint(ctx, "import_style")?.pattern;
 
     for (const [axis, profiles] of byAxis) {
       if (profiles.length < 3) continue;
       const meta: AxisMeta = AXES[axis]; // total by construction — axis is a key of AXES
 
-      // Seed only the axis this declaration actually applies to.
-      const seededPattern = hintPattern && hintPattern in meta.patternNames ? hintPattern : undefined;
+      // Seed only the axis the declaration actually names.
+      const seededPattern = axis === HINT_AXIS ? hintPattern : undefined;
 
       // Entropy gate: high project-wide entropy means no dominant convention,
       // so emit one category-level finding whose deviation IS the entropy
@@ -80,9 +89,9 @@ export const importConsistency: DriftDetector = {
       if (gate.decision === "no_convention") {
         findings.push(...noConventionFinding({
           detector: "import_style",
-          subCategory: meta.subCategory,
+          subCategory: axis,
           driftCategory: "import_style",
-          axisLabel: meta.axisLabel,
+          axisLabel: meta.label,
           totalFiles: profiles.length,
           gate,
           recommendation: meta.noConventionRecommendation,
@@ -100,11 +109,11 @@ export const importConsistency: DriftDetector = {
       for (const v of votes) {
         findings.push({
           detector: "import_style",
-          subCategory: meta.subCategory,
+          subCategory: axis,
           driftCategory: "import_style",
           severity: v.deviators.length >= 3 ? "warning" : "info",
           confidence: gate.confidence,
-          finding: `${meta.headline} in ${v.directory}/: ${v.dominantCount} files use ${meta.patternNames[v.dominant]}, ${v.deviators.length} deviate`,
+          finding: `${capitalizeFirst(meta.label)} in ${v.directory}/: ${v.dominantCount} files use ${meta.patternNames[v.dominant]}, ${v.deviators.length} deviate`,
           dominantPattern: meta.patternNames[v.dominant],
           dominantCount: v.dominantCount,
           totalRelevantFiles: v.totalFiles,

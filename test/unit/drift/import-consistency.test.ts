@@ -18,6 +18,14 @@ function goFile(path: string, content: string): DriftFile {
   return { relativePath: path, language: "go", content, lineCount: content.split("\n").length };
 }
 
+function pyFile(path: string, content: string): DriftFile {
+  return { relativePath: path, language: "python", content, lineCount: content.split("\n").length };
+}
+
+function rsFile(path: string, content: string): DriftFile {
+  return { relativePath: path, language: "rust", content, lineCount: content.split("\n").length };
+}
+
 /** A grouped + sorted Go import block (stdlib and external separated). */
 const GROUPED_GO = `package api\n\nimport (\n\t"fmt"\n\t"net/http"\n\n\t"github.com/foo/bar"\n)\n`;
 
@@ -79,6 +87,41 @@ describe("import-consistency detector", () => {
       const findings = importConsistency.detect(ctx);
       expect(findings.length).toBeGreaterThan(0);
       expect(findings.every((f) => f.subCategory === "path_style")).toBe(true);
+    });
+
+    // `relative` is a pattern key on THREE axes (path_style, py_path_style,
+    // rust_use_path). A JS-flavored "use relative imports" hint must still bind
+    // ONLY to path_style — otherwise it seeds the Python/Rust axes and, because
+    // a seeded vote skips the dominance threshold, emits a zero-deviator finding
+    // on a directory that unanimously uses one convention.
+    const relativeHint = {
+      category: "import_style",
+      pattern: "relative",
+      label: "relative paths",
+      source: "CLAUDE.md",
+      line: 3,
+      text: "use relative imports",
+      confidence: 0.9,
+    };
+
+    it("a 'relative' hint does not leak into Python py_path_style", () => {
+      // 4 files unanimously using absolute-local imports (from pkg.x).
+      const files = Array.from({ length: 4 }, (_, i) =>
+        pyFile(`pkg/m${i}.py`, `from pkg.a import x\nfrom pkg.b import y\n`),
+      );
+      const ctx: DriftContext = { ...mkCtx(files), intentHints: [relativeHint] };
+      const findings = importConsistency.detect(ctx).filter((f) => f.subCategory === "py_path_style");
+      expect(findings).toHaveLength(0);
+    });
+
+    it("a 'relative' hint does not leak into Rust rust_use_path", () => {
+      // 4 files unanimously using crate:: intra-crate paths.
+      const files = Array.from({ length: 4 }, (_, i) =>
+        rsFile(`src/m${i}.rs`, `use crate::a::B;\nuse crate::c::D;\n`),
+      );
+      const ctx: DriftContext = { ...mkCtx(files), intentHints: [relativeHint] };
+      const findings = importConsistency.detect(ctx).filter((f) => f.subCategory === "rust_use_path");
+      expect(findings).toHaveLength(0);
     });
   });
 });
