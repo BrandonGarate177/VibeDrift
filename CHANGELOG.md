@@ -4,7 +4,7 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
-## [Unreleased]
+## 0.17.1 — 2026-07-25
 
 ### Fixed
 - `npx @vibedrift/cli` failed with "could not determine executable to run" since 0.17.0: the
