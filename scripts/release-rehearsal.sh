@@ -18,7 +18,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${REHEARSAL_PORT:-4873}"
 REG="http://localhost:${PORT}"
-WORK="$(mktemp -d -t vd-rehearsal)"
+TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"
+WORK="$(mktemp -d "$TMPBASE/vd-rehearsal.XXXXXX")"
 VERDACCIO_PID=""
 
 cleanup() {
@@ -67,7 +68,7 @@ say "registry up (pid $VERDACCIO_PID)"
 #      an anonymous-publish registry)
 (
   cd "$ROOT"
-  npm publish --registry "$REG" --//localhost:${PORT}/:_authToken=rehearsal
+  VIBEDRIFT_PUBLISH_SANDBOX=1 npm publish --registry "$REG" --//localhost:${PORT}/:_authToken=rehearsal
 )
 say "published ${NAME}@${VERSION} to the rehearsal registry"
 
