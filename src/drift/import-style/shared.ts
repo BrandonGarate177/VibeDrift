@@ -27,6 +27,19 @@ export function capEvidence(evidence: Evidence[]): Evidence[] {
 }
 
 /**
+ * True if a genuinely blank line separates two imports/uses — the shared
+ * group-boundary test for Go and Rust grouping/ordering. `from`/`to` are 0-based
+ * row indices (use the previous declaration's END row so a wrapped multiline
+ * `use` or a comment/attribute between declarations doesn't fake a boundary).
+ */
+export function blankBetween(lines: string[], from: number, to: number): boolean {
+  for (let l = from + 1; l < to; l++) {
+    if ((lines[l] ?? "").trim() === "") return true;
+  }
+  return false;
+}
+
+/**
  * Winner of a two-way count where a file with only one side present classifies
  * as that side, and a tie breaks to the first (`a`) label. This is the shared
  * shape behind path_style (relative/alias), py_path_style (relative/absolute),

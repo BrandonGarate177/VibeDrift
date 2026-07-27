@@ -20,7 +20,7 @@ import type { DriftFile } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { GO_IMPORT_BLOCK_START, GO_IMPORT_BLOCK_END, GO_IMPORT_PATH, GO_IMPORT_SINGLE } from "./patterns.js";
-import { cleanTree, capEvidence } from "./shared.js";
+import { cleanTree, capEvidence, blankBetween } from "./shared.js";
 import { isCommentLine, C_STYLE_COMMENT_MARKERS } from "../comment-markers.js";
 
 interface Spec { row: number; path: string; category: "stdlib" | "external"; code: string; }
@@ -83,16 +83,6 @@ function collectRegex(content: string): Spec[] {
 
 function evidenceOf(specs: Spec[]): { line: number; code: string }[] {
   return capEvidence(specs.map((s) => ({ line: s.row + 1, code: s.code })));
-}
-
-/** True if a genuinely blank line separates two specs. gofmt attaches comments
- *  to the following spec, so only a blank line — not a comment or wrapped line —
- *  delimits a group. Rows are 0-based line indices into `lines`. */
-function blankBetween(lines: string[], prevRow: number, row: number): boolean {
-  for (let l = prevRow + 1; l < row; l++) {
-    if ((lines[l] ?? "").trim() === "") return true;
-  }
-  return false;
 }
 
 function grouping(specs: Spec[], lines: string[]): AxisClassification | null {
