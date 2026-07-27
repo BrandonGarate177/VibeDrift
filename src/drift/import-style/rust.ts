@@ -25,11 +25,21 @@ import { isAnalyzableSource } from "../utils.js";
 import { RUST_USE, RUST_USE_GLOB, RUST_USE_HEAD, RUST_USE_REEXPORT } from "./patterns.js";
 import { capEvidence, cleanTree, binaryMajority, blankBetween } from "./shared.js";
 
-interface UseRow { start: number; end: number; text: string; full: string; isGlob: boolean; } // text = first line (head + display); full = whole declaration; 0-based rows
+interface UseRow { start: number; end: number; text: string; full: string; isGlob: boolean; enumGlob: boolean; } // text = first line (head + display); full = whole declaration; 0-based rows
 
 /** Head token of a `use` path (`crate` | `super` | `self` | std | a crate name), or null. */
 function headOf(text: string): string | null {
   return text.match(RUST_USE_HEAD)?.[1] ?? null;
+}
+
+/** A single `use_wildcard` target whose last path segment before `::*` is
+ *  UpperCamelCase — i.e. an enum/type, so `use …::SomeEnum::*` is variant
+ *  scoping (an accepted idiom), not the namespace-glob anti-pattern. Rust
+ *  naming (snake_case modules, CamelCase types) makes this reliable; a bare
+ *  `{…, *}` glob has no `Ident::` target and reads as a module glob. */
+function isEnumWildcard(wildText: string): boolean {
+  const m = wildText.match(/([A-Za-z_]\w*)::\*$/);
+  return !!m && /^[A-Z]/.test(m[1]);
 }
 
 /** Collect one row per **top-level** `use` declaration. Multiline uses span
@@ -42,8 +52,10 @@ function collectUses(file: DriftFile): UseRow[] {
     // Direct children of source_file only — nested/test-module uses are excluded.
     for (const u of tree.rootNode.namedChildren) {
       if (!u || u.type !== "use_declaration") continue;
-      const isGlob = u.descendantsOfType("use_wildcard").some((n) => n !== null);
-      rows.push({ start: u.startPosition.row, end: u.endPosition.row, text: u.text.split("\n")[0].trim(), full: u.text, isGlob });
+      const wilds = u.descendantsOfType("use_wildcard").filter((n) => n != null);
+      const isGlob = wilds.length > 0;
+      const enumGlob = isGlob && wilds.every((w) => isEnumWildcard(w!.text));
+      rows.push({ start: u.startPosition.row, end: u.endPosition.row, text: u.text.split("\n")[0].trim(), full: u.text, isGlob, enumGlob });
     }
     return rows;
   }
@@ -68,7 +80,12 @@ function collectUses(file: DriftFile): UseRow[] {
     while (!decl.includes(";") && end + 1 < lines.length) { end++; decl += "\n" + lines[end].split("//")[0]; }
     const semi = decl.indexOf(";");
     if (semi !== -1) decl = decl.slice(0, semi + 1);
-    rows.push({ start: i, end, text: scan.trim(), full: decl, isGlob: RUST_USE_GLOB.test(decl) });
+    // enum-variant glob: every `Ident::*` target is CamelCase and there's no bare `{…, *}` glob.
+    const targets = [...decl.matchAll(/([A-Za-z_]\w*)::\*/g)].map((m) => m[1]);
+    const bareGlob = /(^|[^:])\*/.test(decl);
+    const isGlob = RUST_USE_GLOB.test(decl);
+    const enumGlob = isGlob && !bareGlob && targets.length > 0 && targets.every((t) => /^[A-Z]/.test(t));
+    rows.push({ start: i, end, text: scan.trim(), full: decl, isGlob, enumGlob });
     i = end;
   }
   return rows;
@@ -78,10 +95,12 @@ function collectUses(file: DriftFile): UseRow[] {
  *  axes ignore them:
  *   - relative: `use super::*;` (test re-imports), `use self::…::*;` (enum scoping)
  *   - external prelude: `use rayon::prelude::*;` (preludes are designed to be glob-imported)
- *  Crate-root (`use crate::*;`) and crate-internal (`use crate::prelude::*;`)
+ *   - enum-variant scoping: `use …::SomeEnum::*;` (CamelCase target), any head
+ *  Crate-root (`use crate::*;`) and crate-internal module (`use crate::foo::*;`)
  *  globs are deliberate local choices and stay flagged. */
 function isIdiomaticGlob(row: UseRow): boolean {
   if (!row.isGlob) return false;
+  if (row.enumGlob) return true; // `use …::Enum::*` variant scoping, regardless of head
   const head = headOf(row.text);
   if (head === "super" || head === "self") return true;
   // Test `prelude` on the FULL declaration — a wrapped `use rayon::{\n prelude::*,\n }`

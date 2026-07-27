@@ -259,3 +259,35 @@ describe("Rust review round 3 — wrapped external prelude exemption (full-decl 
     expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
   });
 });
+
+describe("Rust enum-variant globs exempt from rust_glob (precision fix B)", () => {
+  it("`use std::…::Ordering::*` (enum-variant scoping) is exempt (AST)", async () => {
+    const f = await rs("src/a.rs", `use std::sync::atomic::Ordering::*;\nuse crate::foo::Bar;\nuse crate::baz::Qux;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+
+  it("`use crate::Colour::*` (crate-rooted enum) is exempt", async () => {
+    const f = await rs("src/a.rs", `use crate::Colour::*;\nuse crate::foo::Bar;\nuse crate::baz::Qux;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+
+  it("a lone enum-variant glob is exempt → not decidable", async () => {
+    const f = await rs("src/a.rs", `use std::cmp::Ordering::*;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")).toEqual([]);
+  });
+
+  it("`use crate::types::*` (snake_case module glob) is still flagged", async () => {
+    const f = await rs("src/a.rs", `use crate::types::*;\nuse crate::foo::Bar;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
+  });
+
+  it("mixed brace `{ Enum::*, module::* }` still flags (a module glob is present)", async () => {
+    const f = await rs("src/a.rs", `use foo::{\n    Bar::*,\n    baz::*,\n};\nuse std::fmt::Debug;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
+  });
+
+  it("enum-variant glob is exempt in the regex fallback too", () => {
+    const f = treeless("src/a.rs", `use std::sync::atomic::Ordering::*;\nuse crate::foo::Bar;\nuse crate::baz::Qux;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+});
