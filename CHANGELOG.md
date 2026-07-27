@@ -4,6 +4,18 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed
+
+- **Signed-in scans no longer upload file contents.** When you are signed in, each scan syncs its
+  result to your dashboard. That payload was carrying the full body of every scanned file, plus the
+  parsed syntax tree, because the step that strips them was unreachable from the code path that
+  builds the upload. Only per-file metadata now leaves your machine: the repo-relative path, the
+  line count, and the language. Nothing else about the dashboard changes.
+  Run a fresh scan to replace any previously synced results, or use `--local-only` to scan with no
+  network at all.
+
 ## 0.18.0 — 2026-07-27
 
 ### Added

@@ -170,7 +170,17 @@ export function sanitizeResultForUpload(result: ScanResult): Record<string, unkn
       totalLines: ctx?.totalLines ?? 0,
     },
     fileCount: (ctx?.files ?? []).length,
-    files: sanitizeNode(ctx?.files),
+    // MUST go through sanitizeFilesList, never the generic sanitizeNode.
+    // `sanitizeNode` only reaches the file stripper when it encounters a key
+    // literally named `files` INSIDE an object; handed the array directly it
+    // falls through to sanitizeObjectNode, whose skip list is just rootDir /
+    // ast / treeSitterNode. Every other key survives, including `content` (the
+    // whole file body) and `tree` (the parsed AST). That is how signed-in
+    // scans came to upload raw source despite the contract in this header.
+    files: sanitizeFilesList(
+      (ctx?.files ?? []) as unknown as Array<Record<string, unknown>>,
+      stripPath,
+    ),
     score: {
       composite: result.compositeScore,
       max: result.maxCompositeScore,
