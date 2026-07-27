@@ -20,6 +20,7 @@
  */
 
 import type { DriftFile, Evidence } from "../types.js";
+import type { Tree } from "../../core/types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { RUST_USE, RUST_USE_GLOB, RUST_USE_HEAD, RUST_USE_REEXPORT } from "./patterns.js";
@@ -32,36 +33,49 @@ function headOf(text: string): string | null {
   return text.match(RUST_USE_HEAD)?.[1] ?? null;
 }
 
-/** A single `use_wildcard` target whose last path segment before `::*` is
- *  UpperCamelCase — i.e. an enum/type, so `use …::SomeEnum::*` is variant
- *  scoping (an accepted idiom), not the namespace-glob anti-pattern. Rust
- *  naming (snake_case modules, CamelCase types) makes this reliable; a bare
- *  `{…, *}` glob has no `Ident::` target and reads as a module glob. */
-function isEnumWildcard(wildText: string): boolean {
-  const m = wildText.match(/([A-Za-z_]\w*)::\*$/);
-  return !!m && /^[A-Z]/.test(m[1]);
+/** True when every glob in a declaration is enum-variant scoping — each `Ident::*`
+ *  target is UpperCamelCase (an enum/type) and there's no bare `{…, *}` module glob.
+ *  So `use …::SomeEnum::*` is an accepted idiom, not the namespace-glob anti-pattern.
+ *  Text-based, so the AST and fallback collectors share one definition; Rust naming
+ *  (snake_case modules, CamelCase types) makes the CamelCase signal reliable. */
+function isEnumVariantGlob(fullText: string): boolean {
+  const targets = [...fullText.matchAll(/([A-Za-z_]\w*)::\*/g)].map((m) => m[1]);
+  const hasBareGlob = /(^|[^:])\*/.test(fullText);
+  return !hasBareGlob && targets.length > 0 && targets.every((t) => /^[A-Z]/.test(t));
 }
 
-/** Collect one row per **top-level** `use` declaration. Multiline uses span
- *  start→end rows; `isGlob` comes from the `use_wildcard` node (AST) or the glob
- *  regex over the full, comment-stripped declaration (fallback). */
+/** One {@link UseRow} per **top-level** `use` declaration — AST on a clean parse,
+ *  regex fallback otherwise. */
 function collectUses(file: DriftFile): UseRow[] {
-  const rows: UseRow[] = [];
   const tree = cleanTree(file);
-  if (tree) {
-    // Direct children of source_file only — nested/test-module uses are excluded.
-    for (const u of tree.rootNode.namedChildren) {
-      if (!u || u.type !== "use_declaration") continue;
-      const wilds = u.descendantsOfType("use_wildcard").filter((n) => n != null);
-      const isGlob = wilds.length > 0;
-      const enumGlob = isGlob && wilds.every((w) => isEnumWildcard(w!.text));
-      rows.push({ start: u.startPosition.row, end: u.endPosition.row, text: u.text.split("\n")[0].trim(), full: u.text, isGlob, enumGlob });
-    }
-    return rows;
+  return tree ? collectAst(tree) : collectFallback(file.content);
+}
+
+/** Direct `use_declaration` children of `source_file` only — nested/test-module
+ *  uses are excluded so they can't poison the file's vote. `isGlob` comes from
+ *  the `use_wildcard` node, so wrapped and brace-group globs are caught. */
+function collectAst(tree: Tree): UseRow[] {
+  const rows: UseRow[] = [];
+  for (const u of tree.rootNode.namedChildren) {
+    if (!u || u.type !== "use_declaration") continue;
+    const isGlob = u.descendantsOfType("use_wildcard").some((n) => n != null);
+    rows.push({
+      start: u.startPosition.row,
+      end: u.endPosition.row,
+      text: u.text.split("\n")[0].trim(),
+      full: u.text,
+      isGlob,
+      enumGlob: isGlob && isEnumVariantGlob(u.text),
+    });
   }
-  // Regex fallback (broken parse): skip block/line comments, follow a `use`
-  // across continuation lines to its `;`, and detect globs on that full text.
-  const lines = file.content.split("\n");
+  return rows;
+}
+
+/** Regex fallback for a broken parse: skip block/line comments, follow each `use`
+ *  across continuation lines to its `;`, and detect globs on the full declaration. */
+function collectFallback(content: string): UseRow[] {
+  const rows: UseRow[] = [];
+  const lines = content.split("\n");
   let inBlockComment = false;
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i];
@@ -80,12 +94,8 @@ function collectUses(file: DriftFile): UseRow[] {
     while (!decl.includes(";") && end + 1 < lines.length) { end++; decl += "\n" + lines[end].split("//")[0]; }
     const semi = decl.indexOf(";");
     if (semi !== -1) decl = decl.slice(0, semi + 1);
-    // enum-variant glob: every `Ident::*` target is CamelCase and there's no bare `{…, *}` glob.
-    const targets = [...decl.matchAll(/([A-Za-z_]\w*)::\*/g)].map((m) => m[1]);
-    const bareGlob = /(^|[^:])\*/.test(decl);
     const isGlob = RUST_USE_GLOB.test(decl);
-    const enumGlob = isGlob && !bareGlob && targets.length > 0 && targets.every((t) => /^[A-Z]/.test(t));
-    rows.push({ start: i, end, text: scan.trim(), full: decl, isGlob, enumGlob });
+    rows.push({ start: i, end, text: scan.trim(), full: decl, isGlob, enumGlob: isGlob && isEnumVariantGlob(decl) });
     i = end;
   }
   return rows;
@@ -160,7 +170,7 @@ function grouping(rows: UseRow[], lines: string[]): AxisClassification | null {
   for (let i = 1; i < sorted.length; i++) {
     if (blankBetween(lines, sorted[i - 1].end, sorted[i].start)) { grouped = true; break; }
   }
-  const items = sorted.map((r) => ({ startRow: r.start, endRow: r.end, key: useOrigin(r.text) ?? "", line: r.start + 1, code: r.text }));
+  const items = sorted.map((r) => ({ startRow: r.start, endRow: r.end, key: useOrigin(r.text) ?? "", code: r.text }));
   return { axis: "rust_grouping", pattern: grouped ? "grouped" : "flat", evidence: groupBoundaryEvidence(items, lines, grouped) };
 }
 

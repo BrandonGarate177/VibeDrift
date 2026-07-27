@@ -92,7 +92,7 @@ function grouping(specs: Spec[], lines: string[]): AxisClassification | null {
   for (let i = 1; i < specs.length; i++) {
     if (blankBetween(lines, specs[i - 1].row, specs[i].row)) { grouped = true; break; }
   }
-  const items = specs.map((s) => ({ startRow: s.row, endRow: s.row, key: s.category, line: s.row + 1, code: s.code }));
+  const items = specs.map((s) => ({ startRow: s.row, endRow: s.row, key: s.category, code: s.code }));
   return { axis: "go_grouping", pattern: grouped ? "grouped" : "flat", evidence: groupBoundaryEvidence(items, lines, grouped) };
 }
 
