@@ -48,3 +48,8 @@ export const RUST_USE_GLOB = /use\s[^;]*(?:::\*|\{[^}]*\*)/;
 /** The head segment of a `use` path → capture [1] (`crate` | `super` | `self` | a crate name).
  *  Tolerates any visibility prefix (`pub`, `pub(crate)`, …) and a leading `::` (`use ::std::mem`). */
 export const RUST_USE_HEAD = /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+(?:::)?(\w+)/;
+/** A re-export — a `use` with `pub` visibility (`pub use`, `pub(crate) use`, `pub(super) use`).
+ *  Re-exports are API-surface decisions, not import-path-style choices, so `rust_use_path`
+ *  ignores them (a `pub use self::child::Item` in a mod.rs re-exports a child module — the
+ *  `self::` isn't a "relative import" the author chose over `crate::`). */
+export const RUST_USE_REEXPORT = /^\s*pub(?:\s*\([^)]*\))?\s+use\s/;

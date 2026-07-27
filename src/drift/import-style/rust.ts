@@ -7,8 +7,9 @@
  * Decidable with a (non-idiomatic) glob present or ≥2 uses.
  *
  * `rust_use_path`: intra-crate refs written absolute (`use crate::…`) vs
- * relative (`use super::…` / `use self::…`). External-crate uses and relative
- * globs are neutral and ignored; ≥2 intra-crate uses to decide.
+ * relative (`use super::…` / `use self::…`). External-crate uses, relative
+ * globs, and `pub use …` re-exports (API surface, not an import choice) are
+ * neutral and ignored; ≥2 intra-crate imports to decide.
  *
  * Only **top-level** `use` declarations count — uses inside `#[cfg(test)] mod
  * tests { … }` and other nested modules follow their own conventions (e.g.
@@ -21,7 +22,7 @@
 import type { DriftFile, Evidence } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
-import { RUST_USE, RUST_USE_GLOB, RUST_USE_HEAD } from "./patterns.js";
+import { RUST_USE, RUST_USE_GLOB, RUST_USE_HEAD, RUST_USE_REEXPORT } from "./patterns.js";
 import { capEvidence, cleanTree, binaryMajority, blankBetween } from "./shared.js";
 
 interface UseRow { start: number; end: number; text: string; full: string; isGlob: boolean; } // text = first line (head + display); full = whole declaration; 0-based rows
@@ -103,6 +104,7 @@ function usePath(rows: UseRow[]): AxisClassification | null {
   const relativeEv: Evidence[] = [];
   for (const r of rows) {
     if (isIdiomaticGlob(r)) continue; // idiomatic glob — not a considered path-style choice
+    if (RUST_USE_REEXPORT.test(r.text)) continue; // `pub use …` re-export — API surface, not an import-path choice
     const head = headOf(r.text);
     if (head === "crate") crateEv.push({ line: r.start + 1, code: r.text });
     else if (head === "super" || head === "self") relativeEv.push({ line: r.start + 1, code: r.text });

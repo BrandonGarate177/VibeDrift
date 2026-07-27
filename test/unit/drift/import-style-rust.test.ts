@@ -150,9 +150,11 @@ describe("Rust grouping: blank line vs wrapped/commented uses", () => {
 });
 
 describe("Rust visibility prefixes (pub(crate) etc.)", () => {
-  it("rust_use_path counts `pub(crate) use` (regex fallback)", () => {
+  it("a `pub(crate) use` re-export is excluded from rust_use_path (regex fallback)", () => {
+    // Visibility prefixes still parse, but `pub(crate) use` is a re-export, not an
+    // import-path choice — so a file of only re-exports is not decidable here.
     const f = treeless("src/a.rs", `pub(crate) use crate::a::B;\npub(crate) use crate::c::D;\n`);
-    expect(axis(rustImportClassifier.classify(f), "rust_use_path")[0]?.pattern).toBe("crate");
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")).toEqual([]);
   });
 
   it("`pub(crate) use super::*;` is still an idiomatic glob, not flagged (AST)", async () => {
@@ -209,6 +211,33 @@ describe("Rust review round 2 — test-module poisoning, AST glob, fallback guar
   it("R5: fallback treats a blank inside a wrapped brace group as flat, not grouped", () => {
     const f = treeless("src/a.rs", `use std::collections::{\n    HashMap,\n\n    HashSet,\n};\nuse crate::foo::Bar;\n`);
     expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("flat");
+  });
+});
+
+
+describe("Rust re-exports excluded from rust_use_path (precision fix A)", () => {
+  it("a mod.rs of only `pub use self::…` re-exports yields no rust_use_path finding", async () => {
+    // Re-exports are API surface, not an import-path choice — a mod.rs shouldn't
+    // read as a lone "relative" deviator among its crate::-importing peers.
+    const f = await rs("src/thing/mod.rs", `pub use self::inner::Thing;\npub use self::other::Widget;\npub(crate) use self::help::run;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")).toEqual([]);
+  });
+
+  it("`pub use self::…` re-exports do not flip a crate::-importing file to relative (AST)", async () => {
+    const f = await rs("src/thing/mod.rs", `use crate::a::B;\nuse crate::c::D;\npub use self::inner::Thing;\n`);
+    const out = axis(rustImportClassifier.classify(f), "rust_use_path");
+    expect(out[0]?.pattern).toBe("crate");
+    expect(out[0].evidence.some((e) => e.code.includes("self::"))).toBe(false);
+  });
+
+  it("a genuine (non-pub) `use super::…` import still counts as relative", async () => {
+    const f = await rs("src/a.rs", `use super::config::Config;\nuse super::db::Db;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")[0]?.pattern).toBe("relative");
+  });
+
+  it("regex fallback: `pub use self::…` re-exports are skipped too", () => {
+    const f = treeless("src/thing/mod.rs", `pub use self::inner::Thing;\npub use self::other::Widget;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")).toEqual([]);
   });
 });
 
