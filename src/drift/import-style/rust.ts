@@ -24,7 +24,7 @@ import { isAnalyzableSource } from "../utils.js";
 import { RUST_USE, RUST_USE_GLOB, RUST_USE_HEAD } from "./patterns.js";
 import { capEvidence, cleanTree, binaryMajority, blankBetween } from "./shared.js";
 
-interface UseRow { start: number; end: number; text: string; isGlob: boolean; } // 0-based rows
+interface UseRow { start: number; end: number; text: string; full: string; isGlob: boolean; } // text = first line (head + display); full = whole declaration; 0-based rows
 
 /** Head token of a `use` path (`crate` | `super` | `self` | std | a crate name), or null. */
 function headOf(text: string): string | null {
@@ -42,7 +42,7 @@ function collectUses(file: DriftFile): UseRow[] {
     for (const u of tree.rootNode.namedChildren) {
       if (!u || u.type !== "use_declaration") continue;
       const isGlob = u.descendantsOfType("use_wildcard").some((n) => n !== null);
-      rows.push({ start: u.startPosition.row, end: u.endPosition.row, text: u.text.split("\n")[0].trim(), isGlob });
+      rows.push({ start: u.startPosition.row, end: u.endPosition.row, text: u.text.split("\n")[0].trim(), full: u.text, isGlob });
     }
     return rows;
   }
@@ -67,7 +67,7 @@ function collectUses(file: DriftFile): UseRow[] {
     while (!decl.includes(";") && end + 1 < lines.length) { end++; decl += "\n" + lines[end].split("//")[0]; }
     const semi = decl.indexOf(";");
     if (semi !== -1) decl = decl.slice(0, semi + 1);
-    rows.push({ start: i, end, text: scan.trim(), isGlob: RUST_USE_GLOB.test(decl) });
+    rows.push({ start: i, end, text: scan.trim(), full: decl, isGlob: RUST_USE_GLOB.test(decl) });
     i = end;
   }
   return rows;
@@ -83,7 +83,9 @@ function isIdiomaticGlob(row: UseRow): boolean {
   if (!row.isGlob) return false;
   const head = headOf(row.text);
   if (head === "super" || head === "self") return true;
-  return head !== "crate" && /\bprelude\b/.test(row.text);
+  // Test `prelude` on the FULL declaration — a wrapped `use rayon::{\n prelude::*,\n }`
+  // has its glob on a continuation line, so first-line text alone would miss it.
+  return head !== "crate" && /\bprelude\b/.test(row.full);
 }
 
 function glob(rows: UseRow[]): AxisClassification | null {

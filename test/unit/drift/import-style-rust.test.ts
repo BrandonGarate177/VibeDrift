@@ -211,3 +211,22 @@ describe("Rust review round 2 — test-module poisoning, AST glob, fallback guar
     expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("flat");
   });
 });
+
+describe("Rust review round 3 — wrapped external prelude exemption (full-decl text)", () => {
+  it("a rustfmt-wrapped `use rayon::{ prelude::*, … }` is exempt, not a glob (AST)", async () => {
+    // The glob is on a continuation line; the exemption must see the whole decl,
+    // not just `use rayon::{`. Two explicit crate uses remain → explicit.
+    const f = await rs("src/a.rs", `use rayon::{\n    prelude::*,\n    iter::IntoParallelRefIterator,\n};\nuse crate::foo::Bar;\nuse crate::baz::Qux;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+
+  it("the same wrapped prelude is exempt in the regex fallback too", () => {
+    const f = treeless("src/a.rs", `use rayon::{\n    prelude::*,\n    iter::IntoParallelRefIterator,\n};\nuse crate::foo::Bar;\nuse crate::baz::Qux;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+
+  it("a wrapped NON-prelude external glob still flags as a glob (no over-exemption)", async () => {
+    const f = await rs("src/a.rs", `use foo::{\n    bar::*,\n    baz::Qux,\n};\nuse std::fmt::Debug;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
+  });
+});
