@@ -20,7 +20,7 @@ import type { DriftFile } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { GO_IMPORT_BLOCK_START, GO_IMPORT_BLOCK_END, GO_IMPORT_PATH, GO_IMPORT_SINGLE } from "./patterns.js";
-import { cleanTree, capEvidence, blankBetween } from "./shared.js";
+import { cleanTree, capEvidence, blankBetween, groupBoundaryEvidence } from "./shared.js";
 import { isCommentLine, C_STYLE_COMMENT_MARKERS } from "../comment-markers.js";
 
 interface Spec { row: number; path: string; category: "stdlib" | "external"; code: string; }
@@ -92,7 +92,8 @@ function grouping(specs: Spec[], lines: string[]): AxisClassification | null {
   for (let i = 1; i < specs.length; i++) {
     if (blankBetween(lines, specs[i - 1].row, specs[i].row)) { grouped = true; break; }
   }
-  return { axis: "go_grouping", pattern: grouped ? "grouped" : "flat", evidence: evidenceOf(specs) };
+  const items = specs.map((s) => ({ startRow: s.row, endRow: s.row, key: s.category, line: s.row + 1, code: s.code }));
+  return { axis: "go_grouping", pattern: grouped ? "grouped" : "flat", evidence: groupBoundaryEvidence(items, lines, grouped) };
 }
 
 function ordering(specs: Spec[], lines: string[]): AxisClassification | null {

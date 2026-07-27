@@ -23,7 +23,7 @@ import type { DriftFile, Evidence } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { RUST_USE, RUST_USE_GLOB, RUST_USE_HEAD, RUST_USE_REEXPORT } from "./patterns.js";
-import { capEvidence, cleanTree, binaryMajority, blankBetween } from "./shared.js";
+import { capEvidence, cleanTree, binaryMajority, blankBetween, groupBoundaryEvidence } from "./shared.js";
 
 interface UseRow { start: number; end: number; text: string; full: string; isGlob: boolean; enumGlob: boolean; } // text = first line (head + display); full = whole declaration; 0-based rows
 
@@ -160,8 +160,8 @@ function grouping(rows: UseRow[], lines: string[]): AxisClassification | null {
   for (let i = 1; i < sorted.length; i++) {
     if (blankBetween(lines, sorted[i - 1].end, sorted[i].start)) { grouped = true; break; }
   }
-  const evidence = capEvidence(sorted.map((r) => ({ line: r.start + 1, code: r.text })));
-  return { axis: "rust_grouping", pattern: grouped ? "grouped" : "flat", evidence };
+  const items = sorted.map((r) => ({ startRow: r.start, endRow: r.end, key: useOrigin(r.text) ?? "", line: r.start + 1, code: r.text }));
+  return { axis: "rust_grouping", pattern: grouped ? "grouped" : "flat", evidence: groupBoundaryEvidence(items, lines, grouped) };
 }
 
 export const rustImportClassifier: ImportStyleClassifier = {

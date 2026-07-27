@@ -291,3 +291,19 @@ describe("Rust enum-variant globs exempt from rust_glob (precision fix B)", () =
     expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
   });
 });
+
+describe("Rust grouping evidence points at the boundary (fix C)", () => {
+  it("grouped: evidence is the pair straddling the blank line", async () => {
+    const f = await rs("src/a.rs", `use std::fmt::Debug;\nuse std::io::Read;\n\nuse crate::foo::Bar;\n`);
+    const out = axis(rustImportClassifier.classify(f), "rust_grouping")[0];
+    expect(out.pattern).toBe("grouped");
+    expect(out.evidence.map((e) => e.line)).toEqual([2, 4]);
+  });
+
+  it("flat: evidence is the run-together different-origin pair", async () => {
+    const f = await rs("src/a.rs", `use std::fmt::Debug;\nuse crate::foo::Bar;\nuse crate::baz::Qux;\n`);
+    const out = axis(rustImportClassifier.classify(f), "rust_grouping")[0];
+    expect(out.pattern).toBe("flat");
+    expect(out.evidence.map((e) => e.line)).toEqual([1, 2]);
+  });
+});

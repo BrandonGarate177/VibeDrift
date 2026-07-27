@@ -154,3 +154,19 @@ describe("Go grouping edge cases (blank line vs comment / one-line block)", () =
     expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("flat");
   });
 });
+
+describe("Go grouping evidence points at the boundary (fix C)", () => {
+  it("grouped: evidence is the pair straddling the blank line", async () => {
+    const f = await go("a.go", `package main\n\nimport (\n\t"fmt"\n\n\t"github.com/gin-gonic/gin"\n)\n`);
+    const out = axis(goImportClassifier.classify(f), "go_grouping")[0];
+    expect(out.pattern).toBe("grouped");
+    expect(out.evidence.map((e) => e.line)).toEqual([4, 6]);
+  });
+
+  it("flat: evidence is the run-together different-category pair", async () => {
+    const f = await go("b.go", `package main\n\nimport (\n\t"fmt"\n\t"github.com/gin-gonic/gin"\n)\n`);
+    const out = axis(goImportClassifier.classify(f), "go_grouping")[0];
+    expect(out.pattern).toBe("flat");
+    expect(out.evidence.map((e) => e.line)).toEqual([4, 5]);
+  });
+});

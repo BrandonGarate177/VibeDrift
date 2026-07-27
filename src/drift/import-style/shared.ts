@@ -40,6 +40,34 @@ export function blankBetween(lines: string[], from: number, to: number): boolean
 }
 
 /**
+ * Evidence that points at the grouping decision rather than just the first few
+ * imports: for a `grouped` file, the pair straddling the first blank-line group
+ * boundary; for a `flat` file, the first adjacent different-origin pair run
+ * together with no blank. Shared by the Go and Rust `grouping` axes. Items are
+ * source-ordered with `key` = origin/category. Falls back to the capped list if
+ * no boundary is found (shouldn't happen once a file is decidable).
+ */
+export function groupBoundaryEvidence(
+  items: { startRow: number; endRow: number; key: string; line: number; code: string }[],
+  lines: string[],
+  grouped: boolean,
+): Evidence[] {
+  const pair = (a: (typeof items)[number], b: (typeof items)[number]): Evidence[] => [
+    { line: a.line, code: a.code },
+    { line: b.line, code: b.code },
+  ];
+  for (let i = 1; i < items.length; i++) {
+    const blank = blankBetween(lines, items[i - 1].endRow, items[i].startRow);
+    if (grouped) {
+      if (blank) return pair(items[i - 1], items[i]);
+    } else if (!blank && items[i - 1].key !== items[i].key) {
+      return pair(items[i - 1], items[i]);
+    }
+  }
+  return capEvidence(items.map((it) => ({ line: it.line, code: it.code })));
+}
+
+/**
  * Winner of a two-way count where a file with only one side present classifies
  * as that side, and a tie breaks to the first (`a`) label. This is the shared
  * shape behind path_style (relative/alias), py_path_style (relative/absolute),
