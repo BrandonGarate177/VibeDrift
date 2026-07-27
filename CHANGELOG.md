@@ -17,6 +17,17 @@ explicitly under **Breaking** so CI users can recalibrate.
   now also reads CommonJS `require()` alongside ES imports. Idiomatic Rust globs (`use super::*;`
   in tests, external `::prelude::*`) are excluded to avoid false positives. Closes #56.
 
+### Changed
+
+- **Go, Python and Rust projects may see their score move in this release.** Import style is a
+  scored drift category that applies to every language, but until now only JS/TS could produce
+  findings for it, so those projects scored it clean by default. Now that the detector reads them,
+  a real import inconsistency counts against the score the same way it always has for JS/TS.
+  Nothing about the scoring formula changed, and JS/TS scores are unaffected.
+- Because those numbers were produced under different detection coverage, VibeDrift refuses to
+  compute a trend across this release rather than reporting a drop your code did not cause. The
+  first scan after upgrading establishes the new baseline, and trends resume from there.
+
 ## 0.17.1 — 2026-07-25
 
 ### Fixed
