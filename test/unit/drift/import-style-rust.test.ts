@@ -160,3 +160,54 @@ describe("Rust visibility prefixes (pub(crate) etc.)", () => {
     expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
   });
 });
+
+
+describe("Rust review round 2 — test-module poisoning, AST glob, fallback guards", () => {
+  it("R1: a #[cfg(test)] mod's `use super::*;` does not poison grouping", async () => {
+    // Only the two top-level std uses count (single origin) → no grouping finding.
+    const f = await rs("src/a.rs", `use std::fmt;\nuse std::io;\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n}\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")).toEqual([]);
+  });
+
+  it("R2: a test module's crate:: uses do not flip rust_use_path", async () => {
+    const f = await rs("src/a.rs", `use super::config::Config;\nuse super::db::Db;\n\n#[cfg(test)]\nmod tests {\n    use crate::test_utils::a;\n    use crate::test_utils::b;\n    use crate::test_utils::c;\n}\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")[0]?.pattern).toBe("relative");
+  });
+
+  it("R3: a rustfmt-wrapped `io::*` is detected as a glob (AST use_wildcard)", async () => {
+    const f = await rs("src/a.rs", `use tokio::{\n    io::*,\n    net::TcpStream,\n};\nuse std::fmt::Debug;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
+  });
+
+  it("R3: a brace-group wildcard `{self, *}` is detected as a glob", async () => {
+    const f = await rs("src/a.rs", `use std::io::{self, *};\nuse std::fmt::Debug;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
+  });
+
+  it("R6: rust_use_path evidence shows only the winning side", async () => {
+    const f = await rs("src/a.rs", `use super::helpers::x;\nuse crate::models::User;\nuse crate::db::Session;\n`);
+    const out = axis(rustImportClassifier.classify(f), "rust_use_path");
+    expect(out[0]?.pattern).toBe("crate");
+    expect(out[0].evidence.every((e) => e.code.includes("crate::"))).toBe(true);
+  });
+
+  it("R7: leading-`::` uses still resolve a head (origins decidable)", async () => {
+    const f = await rs("src/a.rs", `use ::std::mem;\nuse ::serde::Deserialize;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("flat");
+  });
+
+  it("R4: fallback ignores uses inside a block comment", () => {
+    const f = treeless("src/a.rs", `/*\nuse crate::old::Widget;\nuse crate::old::Gadget;\n*/\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")).toEqual([]);
+  });
+
+  it("R4: fallback does not treat a trailing-comment `::*` as a glob", () => {
+    const f = treeless("src/a.rs", `use crate::x::Foo; // was: use crate::x::*\nuse crate::y::Bar;\nuse crate::z::Baz;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+
+  it("R5: fallback treats a blank inside a wrapped brace group as flat, not grouped", () => {
+    const f = treeless("src/a.rs", `use std::collections::{\n    HashMap,\n\n    HashSet,\n};\nuse crate::foo::Bar;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_grouping")[0]?.pattern).toBe("flat");
+  });
+});

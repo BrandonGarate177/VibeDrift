@@ -42,8 +42,9 @@ export const PY_WILDCARD = /^\s*from\s+\S+\s+import\s+\*/;
 /** A `use` declaration line, optionally with any visibility — `pub use`,
  *  `pub(crate) use`, `pub(super) use`, `pub(in path) use`. */
 export const RUST_USE = /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+/;
-/** A glob `use` — `use …::*`. */
-export const RUST_USE_GLOB = /use\s[^;]*::\*/;
+/** A glob `use` — `use …::*;` or a brace-group wildcard `use …::{…, *}`.
+ *  (The AST path detects globs via the `use_wildcard` node; this is the fallback.) */
+export const RUST_USE_GLOB = /use\s[^;]*(?:::\*|\{[^}]*\*)/;
 /** The head segment of a `use` path → capture [1] (`crate` | `super` | `self` | a crate name).
- *  Tolerates any visibility prefix (`pub`, `pub(crate)`, …). */
-export const RUST_USE_HEAD = /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+(\w+)/;
+ *  Tolerates any visibility prefix (`pub`, `pub(crate)`, …) and a leading `::` (`use ::std::mem`). */
+export const RUST_USE_HEAD = /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+(?:::)?(\w+)/;
