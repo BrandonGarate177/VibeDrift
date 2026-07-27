@@ -1,11 +1,10 @@
 {
   "name": "@vibedrift/cli",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "Ship agentic. Stay coherent. Self-checking code integrity for AI coding agents, in the loop via MCP.",
   "type": "module",
   "bin": {
-    "vibedrift": "bin/vibedrift.mjs",
-    "vibedrift-hook": "bin/vibedrift-hook.mjs"
+    "vibedrift": "bin/vibedrift.mjs"
   },
   "main": "./dist/cli/index.js",
   "exports": {
@@ -31,7 +30,7 @@
     "calibrate": "tsx test/calibration/precision-recall.ts",
     "calibrate:monotonic": "tsx test/calibration/run.ts",
     "handbook": "node scripts/build-handbook.mjs",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "prepublishOnly": "node scripts/publish-guard.mjs && npm run lint && npm run typecheck && npm run build && npm run test"
   },
   "keywords": [
     "vibe-coding",

@@ -17,6 +17,14 @@ explicitly under **Breaking** so CI users can recalibrate.
   now also reads CommonJS `require()` alongside ES imports. Idiomatic Rust globs (`use super::*;`
   in tests, external `::prelude::*`) are excluded to avoid false positives. Closes #56.
 
+## 0.17.1 — 2026-07-25
+
+### Fixed
+- `npx @vibedrift/cli` failed with "could not determine executable to run" since 0.17.0: the
+  package briefly declared a second executable, which stops `npx` from auto-selecting the CLI.
+  The package now declares a single `vibedrift` executable again; the session hook entrypoint is
+  unchanged (hooks invoke it by absolute path, and `bin/vibedrift-hook.mjs` remains available).
+
 ## 0.17.0 — 2026-07-23
 
 ### Added
