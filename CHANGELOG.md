@@ -4,7 +4,7 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
-## [Unreleased]
+## 0.19.0 — 2026-07-28
 
 **Drift Sessions goes native.** Your AI agent drifts while it works: a `.then()` chain in an
 async/await repo, a helper that already exists, a convention quietly broken. Drift Sessions
