@@ -10,23 +10,34 @@
  */
 
 import readline from "readline";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import chalk from "chalk";
 import { repoIdentity, defaultSessionsDir } from "../../session/repo.js";
-import { installHooks, uninstallHooks, hooksStatus } from "../../session/install.js";
+import {
+  installHooks,
+  uninstallHooks,
+  hooksStatus,
+  resolveHookCommand,
+  detectClaudeCode,
+} from "../../session/install.js";
+import { recordAnswer } from "../../session/activation.js";
+import { appendConsentReceipt } from "../../session/consent.js";
+import { vibedriftHome } from "../../core/vibedrift-home.js";
 import { runLiveTape } from "../../session/live.js";
 import { runUploader, shouldSync } from "../../session/uploader.js";
 import { parseJsonlLines } from "../../session/ledger.js";
 import { summarize } from "../../session/summary.js";
 import { readConfig, patchConfig } from "../../auth/config.js";
-import { postSessionIngest } from "../../auth/api.js";
+import { postSessionIngest, type SessionIngestResponse } from "../../auth/api.js";
 import type { UploadEvent } from "../../session/upload-schema.js";
 
 interface UploadPlan {
-  post: (events: UploadEvent[]) => Promise<void>;
+  /** Returns the server ack so the uploader can commit durable offsets
+   *  contiguously (frozen wire contract v1); throws VibeDriftApiError(402)
+   *  when the whole batch is entitlement-locked. */
+  post: (events: UploadEvent[]) => Promise<SessionIngestResponse>;
   teamIntentOptIn: boolean;
 }
 import {
@@ -55,6 +66,8 @@ export interface WatchSessionOptions {
   sessionsDir?: string;
   hookCommand?: string;
   homeDir?: string;
+  /** Root of the activation store (default vibedriftHome()). */
+  activationHome?: string;
   confirm?: (question: string) => Promise<boolean>;
   /** Inject the resolved entitlement (bypasses the network); tests use this.
    *  Return null to simulate "login required". */
@@ -77,23 +90,6 @@ export type WatchSessionStatus =
   | "login_required"
   | "sync_updated"
   | "aborted_unparseable";
-
-function detectClaudeCode(repoRoot: string, homeDir: string): boolean {
-  return (
-    existsSync(join(repoRoot, ".claude")) || existsSync(join(homeDir, ".claude", "settings.json"))
-  );
-}
-
-/** Absolute `node <dist>/session/hook-entry.js` so hooks never depend on PATH.
- *  At runtime this module lives in dist/cli/, so the entry is a sibling tree.
- *  Both paths are double-quoted so a node install or repo checkout under a
- *  directory containing spaces still runs (the shell would otherwise split it);
- *  the trailing ` #vibedrift-hook` marker stays a shell comment. */
-function resolveHookCommand(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const entry = resolve(here, "..", "session", "hook-entry.js");
-  return `"${process.execPath}" "${entry}"`;
-}
 
 async function askConsent(question: string): Promise<boolean> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -244,6 +240,18 @@ export async function runWatchSession(
     process.exitCode = 1;
     return "aborted_unparseable";
   }
+  // The user just consented (prompt or --yes): record the explicit answer so
+  // the nudge never fires here. Grandfathered installs (the early-return
+  // "already" path above) deliberately never reach this line.
+  recordAnswer(projectHash, "active", "watch-session", options.activationHome ?? vibedriftHome());
+  appendConsentReceipt(ledgerDir, {
+    v: 1,
+    at: new Date().toISOString(),
+    action: "enable",
+    surface: "watch-session",
+    projectHash,
+    rootDir,
+  });
   const installed = res.status === "already" ? "already" : "installed";
   if (installed === "already") {
     console.log(`${chalk.green("●")} Drift Sessions hooks already installed (${res.file}).`);
@@ -351,9 +359,7 @@ async function resolveUploadPlan(options: WatchSessionOptions): Promise<UploadPl
     const apiUrl = cfg.apiUrl;
     return {
       teamIntentOptIn: cfg.sessionsTeamIntentOptIn === true,
-      post: async (events) => {
-        await postSessionIngest(token, events, { apiUrl });
-      },
+      post: (events) => postSessionIngest(token, events, { apiUrl }),
     };
   } catch {
     return undefined; // config unreadable → no sync, local unaffected
