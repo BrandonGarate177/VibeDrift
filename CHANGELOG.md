@@ -6,40 +6,51 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## 0.19.0 — 2026-07-29
 
-**VibeDrift now lives in your AI agent's decision loop.**
+**Your agent now cleans up after itself.**
 
-Scans catch drift after the fact. The MCP catches it only when the agent decides to ask, and
-you never see that happen. Drift Sessions is different: hooks fire on every prompt and every
-edit, automatically. The agent writes a `.then()` chain into your async/await repo and the
-advisory lands in the agent's own context before it moves on. It fixes it, parks it for you,
-or pushes back with a reason, on the record. A finding counts as fixed only when the same
-check re-runs over the new code and passes.
+You let an AI write a lot of your code. It is fast, but it does not know your codebase the way
+you do: it re-invents helpers you already have, drifts off the patterns your team settled on,
+and leaves all of it for you to catch in review.
 
-No scan to remember. No tool call the agent might skip. No terminal to babysit.
+Drift Sessions puts VibeDrift inside the agent's decision loop. The moment an edit strays from
+how your codebase actually does things, the agent hears about it in its own context, while it
+is still working. Most of the time it simply fixes the code and moves on. You see the diff
+after it has already been corrected.
 
-### One command
+Setup is one command, once per repo:
 
 ```
 vibedrift enable
 ```
 
-Typing it is the consent. It installs the Claude Code hooks for that repo and prints exactly
-what gets recorded: prompts (secrets masked) and edit metadata, to a local ledger. Nothing
-leaves your machine unless you turn on hosted sync. `vibedrift decline` is the permanent no,
-reversible anytime. Hooks fail open: an error or timeout never interrupts your agent.
+No terminal to keep open. No tool call the agent might skip (the MCP waits to be asked; this
+does not wait). Nothing to remember before each session.
 
-### Also in this release
+### What you get
 
-- **Claude asks once.** In a repo with VibeDrift installed but sessions never decided, the
-  agent relays a one-line ask at session start. Three asks ever, then it stays quiet.
-- **Uploads that cannot lie.** With hosted sync on, each turn ships its events in the
-  background with ack-gated offsets: nothing re-sends, nothing is lost on restart, and
-  `watch-session` backfills anything a native session left behind.
-- **`watch-session` is now optional.** Still the live tape, no longer what makes syncing work.
-- **`vibedrift enable --dir <path>`** activates every repo under a directory after a typed
-  confirmation; home directories and filesystem roots are refused.
+- **Fewer bad diffs in review.** Off-pattern code is caught and corrected while the agent
+  works, not days later in a pull request.
+- **An honest record.** Every catch, every fix, every time the agent pushed back and why, on
+  your dashboard. A fix only counts when the same check re-runs over the new code and passes.
+  Nothing is taken on the agent's word.
+- **Your code stays yours.** Sessions are recorded to a local ledger, prompts secrets-masked.
+  With hosted sync on, only findings and outcomes reach the dashboard, never your code or your
+  prompts. `vibedrift decline` turns it off for a repo, reversible anytime.
+- **Running agents across a team?** The session record shows what drifted and what got fixed in
+  every agent session, without reading every diff.
 
-Drift Sessions is a Pro feature; the first five sessions are free to try.
+### Also in 0.19.0
+
+- In a repo that has never decided, Claude offers to turn it on, once, at session start. Three
+  asks ever, then it stays quiet.
+- `vibedrift enable --dir <path>` turns on every repo under a folder, with a typed confirmation
+  first. Home directories and filesystem roots are refused.
+- `watch-session` is now optional: still the live terminal tape, no longer what makes syncing
+  work.
+- Uploads survive restarts and never double-send.
+- Hooks fail open: an error or timeout never interrupts your agent.
+
+Drift Sessions is a Pro feature. The first five sessions are free.
 
 ## 0.18.1 — 2026-07-27
 
