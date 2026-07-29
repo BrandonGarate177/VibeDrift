@@ -8,6 +8,8 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 **Your agent now cleans up after itself.**
 
+[Watch it work (60 seconds)](https://github.com/VibeDrift/VibeDrift/releases/download/v0.19.0/native-sessions-demo.mp4).
+
 You let an AI write a lot of your code. It is fast, but it does not know your codebase the way
 you do: it re-invents helpers you already have, drifts off the patterns your team settled on,
 and leaves all of it for you to catch in review.
