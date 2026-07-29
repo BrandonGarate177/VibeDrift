@@ -4,57 +4,42 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
-## 0.19.0 — 2026-07-28
+## 0.19.0 — 2026-07-29
 
-**Drift Sessions goes native.** Your AI agent drifts while it works: a `.then()` chain in an
-async/await repo, a helper that already exists, a convention quietly broken. Drift Sessions
-catches that in the agent's own decision loop, as the edit happens, not in review three days
-later. The advisory lands in the agent's context, the agent fixes, parks, or pushes back with a
-reason, and a finding only counts as resolved when the same check re-runs over the new code and
-passes. As of this release none of it needs a terminal running: `vibedrift enable` once per repo,
-and every session is watched from then on.
+**VibeDrift now lives in your AI agent's decision loop.**
 
-### Added
+Scans catch drift after the fact. The MCP catches it only when the agent decides to ask, and
+you never see that happen. Drift Sessions is different: hooks fire on every prompt and every
+edit, automatically. The agent writes a `.then()` chain into your async/await repo and the
+advisory lands in the agent's own context before it moves on. It fixes it, parks it for you,
+or pushes back with a reason, on the record. A finding counts as fixed only when the same
+check re-runs over the new code and passes.
 
-- **`vibedrift enable`: turning Drift Sessions on is one typed command.** Typing
-  `vibedrift enable` in a repo is the consent, and the command prints exactly what you are
-  consenting to: your prompts (secrets masked) and edit metadata are recorded to a local
-  ledger, nothing leaves your machine unless you separately turn on hosted sync, and hooks
-  fail open so an error or timeout never interrupts your agent. It installs the Claude Code
-  hooks when the agent is present and writes a local consent receipt you can inspect.
-  `vibedrift decline` is the permanent no for a repo: you are not asked again and capture
-  stays off, reversible anytime with `vibedrift enable`. `vibedrift enable --dir <path>`
-  activates every repo under a directory after showing you the resolved path and asking for
-  a typed confirmation; your home directory and filesystem roots are refused.
-- **Sessions run natively: no watch-session terminal needed.** In an enabled repo the hooks
-  capture the session on their own, and with hosted sync on, each agent turn ships its
-  events to your dashboard in the background as the turn ends. Keeping `vibedrift
-  watch-session` open is now optional: it is still the live tape, but no longer the thing
-  that makes syncing work.
-- **Claude asks once at session start.** In a repo where VibeDrift is installed but sessions
-  were never enabled or declined, Claude asks in plain language at the start of a new
-  session whether to turn on live drift monitoring. Saying yes enables it through the new
-  `enable` MCP tool, which never activates without your explicit confirmation. Saying no, or
-  ignoring the question, declines the repo so you are not asked again. A repo that never
-  gets an answer is asked at most three times, then the asks stop for good; the last ask
-  says so, and `vibedrift enable` or `vibedrift decline` always sets the answer explicitly.
-  Sessions marked non-interactive (CI, headless runs) are never asked.
+No scan to remember. No tool call the agent might skip. No terminal to babysit.
 
-### Changed
+### One command
 
-- **Uploads are durable and survive restarts.** Sync progress is now recorded per ledger
-  file and advances only after the server confirms receipt. Close the terminal mid-upload,
-  lose the network, or reboot: the next flush resumes exactly where the last one stopped,
-  and sessions recorded while nothing was syncing are backfilled, oldest first, the next
-  time anything syncs. Re-sends are recognized server-side, so nothing is double-counted.
-  `vibedrift watch-session` now catches up on that backlog when it starts instead of only
-  following the newest session.
-- **The trial and Pro work the same on the native path.** The free trial still covers your
-  first five sessions with everything on, and while on trial the session-start ask tells you
-  how many trial sessions you have used. When the trial is spent, a single line at session
-  start tells you capture is paused and how to upgrade; your local ledgers stay yours.
-  Upgrading to Pro takes effect on your next agent turn, with no restart and no
-  watch-session required.
+```
+vibedrift enable
+```
+
+Typing it is the consent. It installs the Claude Code hooks for that repo and prints exactly
+what gets recorded: prompts (secrets masked) and edit metadata, to a local ledger. Nothing
+leaves your machine unless you turn on hosted sync. `vibedrift decline` is the permanent no,
+reversible anytime. Hooks fail open: an error or timeout never interrupts your agent.
+
+### Also in this release
+
+- **Claude asks once.** In a repo with VibeDrift installed but sessions never decided, the
+  agent relays a one-line ask at session start. Three asks ever, then it stays quiet.
+- **Uploads that cannot lie.** With hosted sync on, each turn ships its events in the
+  background with ack-gated offsets: nothing re-sends, nothing is lost on restart, and
+  `watch-session` backfills anything a native session left behind.
+- **`watch-session` is now optional.** Still the live tape, no longer what makes syncing work.
+- **`vibedrift enable --dir <path>`** activates every repo under a directory after a typed
+  confirmation; home directories and filesystem roots are refused.
+
+Drift Sessions is a Pro feature; the first five sessions are free to try.
 
 ## 0.18.1 — 2026-07-27
 
