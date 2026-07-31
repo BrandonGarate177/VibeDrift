@@ -28,3 +28,6 @@ eval/discrimination/.cache/
 
 # Internal security sub-phase plans (local execution docs, not for the public repo)
 PLAN-security-conformance-*.md
+
+# Claude Code local hook installs (vibedrift enable) — never committed
+.claude/settings.local.json
