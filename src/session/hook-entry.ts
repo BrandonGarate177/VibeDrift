@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { TrialRecapTotals } from "./trial-recap.js";
+import type { EditCheckOutcome } from "./check.js";
 
 const SELF_TIMEOUT_MS = 2000;
 
@@ -246,6 +247,33 @@ async function main(): Promise<number> {
   }
 
   const sessionsDir = defaultSessionsDir();
+
+  // Decide `checked` BEFORE the ledger write, so the recorded edit event
+  // carries the check's real outcome rather than an inference (P1.7: the
+  // drift-density denominator counts only edits the inline check RAN on).
+  // Preconditions here (in-repo file, non-empty body) are one skip class;
+  // runEditChecks reports its own (non-code file, missing or oversized
+  // baseline, load or detect error) via `res.checked`. Stated cost of the
+  // reordering: the check now runs BEFORE the append, so a self-timeout
+  // firing inside it loses the edit event too (previously only flags were
+  // at risk). The window is bounded small on purpose: the baseline read is
+  // stat-capped (HOOK_BASELINE_MAX_BYTES) and the entry gate keeps the
+  // warm-path check in low milliseconds.
+  let editCheck: EditCheckOutcome | null = null;
+  if (event.type === "edit") {
+    if (body && checkAbsFile) {
+      editCheck = await runEditChecks({
+        rootDir,
+        projectHash,
+        sessionId: event.sid,
+        sessionsDir,
+        file: checkAbsFile,
+        body,
+      });
+    }
+    event.detail.checked = editCheck?.checked ?? false;
+  }
+
   await appendEvent(sessionsDir, projectHash, event.sid, event);
 
   // End of a turn (Claude Code fires Stop per response): ship this turn's
@@ -266,15 +294,8 @@ async function main(): Promise<number> {
     let fyi: string | null = null;
     const outcomes = await readOutcomeState(sessionsDir, projectHash, event.sid);
 
-    if (checkAbsFile) {
-      const res = await runEditChecks({
-        rootDir,
-        projectHash,
-        sessionId: event.sid,
-        sessionsDir,
-        file: checkAbsFile,
-        body,
-      });
+    if (checkAbsFile && editCheck) {
+      const res = editCheck;
 
       // Finding-scoped resolution: measure each open finding against its own
       // anchored construct in the file's whole current content rather than the

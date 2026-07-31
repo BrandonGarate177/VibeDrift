@@ -13,6 +13,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { loadBaselineUnchecked, type RepoDriftBaseline } from "../core/baseline.js";
+import { detectLanguage } from "../core/language.js";
 import { detectDrift } from "./detect.js";
 import type { FindingAnchor } from "./finding-anchor.js";
 import { newActivityId, safeSegment } from "./ledger.js";
@@ -47,6 +48,10 @@ export interface EditCheckOutcome {
   /** findingId to the construct the finding was raised against. Local only:
    *  this feeds the session's outcome sidecar and is never part of an event. */
   anchors: Record<string, FindingAnchor>;
+  /** true only when the drift detection actually RAN on this edit (flagged or
+   *  clean); false when it was skipped (missing/oversized baseline, load or
+   *  detect error). The honest denominator for drift density (P1.7). */
+  checked: boolean;
 }
 
 function statePath(opts: EditCheckOptions): string {
@@ -82,27 +87,43 @@ async function writeState(opts: EditCheckOptions, state: CooldownState): Promise
   }
 }
 
+/** Stat-gate for the hook path's baseline read: it runs ahead of the ledger
+ *  append and the 2s watchdog cannot preempt a synchronous JSON.parse, so an
+ *  oversized cache is a skip (checked=false), never a session stall. Far
+ *  above any baseline the inline entry gate would accept anyway. */
+const HOOK_BASELINE_MAX_BYTES = 8 * 1024 * 1024;
+
 export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOutcome> {
-  const load = opts.loadBaselineFor ?? loadBaselineUnchecked;
+  const load = opts.loadBaselineFor ?? ((rootDir: string) => loadBaselineUnchecked(rootDir, HOOK_BASELINE_MAX_BYTES));
   const now = opts.now ?? Date.now;
 
   let baseline: RepoDriftBaseline | null;
   try {
     baseline = await load(opts.rootDir);
   } catch {
-    return { flags: [], fyi: null, baseline: null, anchors: {} };
+    return { flags: [], fyi: null, baseline: null, anchors: {}, checked: false };
   }
   if (!baseline || baseline.minhashIndex.length > INLINE_CHECK_MAX_ENTRIES) {
-    return { flags: [], fyi: null, baseline: null, anchors: {} };
+    return { flags: [], fyi: null, baseline: null, anchors: {}, checked: false };
   }
 
   const relPath = relative(opts.rootDir, opts.file) || opts.file;
+
+  // Non-code is a skip class (P1 contract): prose and config bodies would
+  // dilute the checked-edit denominator, and a code snippet quoted inside
+  // docs must not flag. The gate and the flag path exit together — stamping
+  // checked=false while still flagging would orphan flags outside the
+  // density denominator.
+  if (detectLanguage(relPath) === null) {
+    return { flags: [], fyi: null, baseline, anchors: {}, checked: false };
+  }
 
   let detected: ReturnType<typeof detectDrift>;
   try {
     detected = detectDrift(baseline, relPath, opts.body);
   } catch {
-    return { flags: [], fyi: null, baseline, anchors: {} };
+    // the check errored, so it did NOT run — never report an errored edit as checked
+    return { flags: [], fyi: null, baseline, anchors: {}, checked: false };
   }
   const conflictsByDim = detected.conflicts;
   const dupsByLoc = detected.dups;
@@ -175,5 +196,5 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   }
 
   if (flags.length > 0) await writeState(opts, state);
-  return { flags, fyi, baseline, anchors };
+  return { flags, fyi, baseline, anchors, checked: true };
 }
