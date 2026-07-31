@@ -214,15 +214,106 @@ describe("Stop-hook session-flush spawn (integration)", () => {
   });
 });
 
+function entitlement(home: string, e: Record<string, unknown>): void {
+  mkdirSync(join(home, ".vibedrift"), { recursive: true });
+  writeFileSync(join(home, ".vibedrift", "sessions-entitlement.json"), JSON.stringify(e));
+}
+
+/** Capture a projectHash by running one startup, then mark the repo active. */
+function activateRepo(home: string, repo: string): string {
+  runStart(home, repo, "startup");
+  const path = join(home, ".vibedrift", "activation.json");
+  const store = JSON.parse(readFileSync(path, "utf8"));
+  const hash = Object.keys(store.projects)[0];
+  store.projects[hash] = { state: "active", surface: "cli-enable" };
+  writeFileSync(path, JSON.stringify(store));
+  return hash;
+}
+
+describe("trial meter on activated repos (integration)", () => {
+  const TRIAL = { entitled: true, reason: "trial", plan: "free", trialUsed: 2, trialLimit: 5 };
+
+  it("shows the trial count at SessionStart on an activated trial repo", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    const r = runStart(home, repo, "startup", "s2");
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    // a user notice only: no model-facing instruction on an activated repo
+    expect(out).not.toHaveProperty("hookSpecificOutput");
+    expect(out.systemMessage).toBe("VibeDrift trial: 2 of 5 sessions used.");
+  });
+
+  it("stays silent for a pro account", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, { entitled: true, reason: "pro", plan: "pro", trialUsed: 0, trialLimit: 5 });
+    expect(runStart(home, repo, "startup", "s2").stdout.trim()).toBe("");
+  });
+
+  it("stays silent when the entitlement cache is missing", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    expect(runStart(home, repo, "startup", "s2").stdout.trim()).toBe("");
+  });
+
+  it("stays silent on resume/compact (continuation, not a new session)", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    expect(runStart(home, repo, "resume", "s2").stdout.trim()).toBe("");
+    expect(runStart(home, repo, "compact", "s3").stdout.trim()).toBe("");
+  });
+
+  it("stays silent in a non-interactive/headless context", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    const r = runStart(home, repo, "startup", "s2", { VIBEDRIFT_HOOK_NONINTERACTIVE: "1" });
+    expect(r.stdout.trim()).toBe("");
+  });
+
+  it("shows the meter on /clear (a genuinely new interactive session)", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    const out = JSON.parse(runStart(home, repo, "clear", "s2").stdout.trim());
+    expect(out.systemMessage).toBe("VibeDrift trial: 2 of 5 sessions used.");
+  });
+
+  it("warns at the start of the last free session", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, { ...TRIAL, trialUsed: 4 });
+    const out = JSON.parse(runStart(home, repo, "startup", "s2").stdout.trim());
+    expect(out.systemMessage).toBe(
+      "VibeDrift trial: 4 of 5 sessions used. This is your last free session.",
+    );
+  });
+
+  it("still records the session (the meter is a notice, not a gate)", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    const hash = activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    runStart(home, repo, "startup", "s2");
+    const captured = readFileSync(join(home, ".vibedrift", "sessions", hash, "s2.jsonl"), "utf8");
+    expect(captured).toContain('"type":"session_start"');
+  });
+});
+
 describe("entitlement lock in the native path (integration)", () => {
   function config(home: string, cfg: Record<string, unknown>): void {
     mkdirSync(join(home, ".vibedrift"), { recursive: true });
     writeFileSync(join(home, ".vibedrift", "config.json"), JSON.stringify(cfg));
-  }
-
-  function entitlement(home: string, e: Record<string, unknown>): void {
-    mkdirSync(join(home, ".vibedrift"), { recursive: true });
-    writeFileSync(join(home, ".vibedrift", "sessions-entitlement.json"), JSON.stringify(e));
   }
 
   const LOCKED = {
@@ -260,7 +351,76 @@ describe("entitlement lock in the native path (integration)", () => {
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout.trim());
     expect(out.systemMessage).toContain("trial is used up");
-    expect(out.systemMessage).toContain("vibedrift upgrade");
+    // clean read (the only local ledger holds no flags): the machine-scoped clean copy
+    expect(out.systemMessage).toContain(
+      "Your watched sessions on this machine ran clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing",
+    );
+  });
+
+  it("recaps the trial's real numbers on the locked attempt", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    const hash = activateRepo(home, repo);
+    const ev = (over: Record<string, unknown>): string =>
+      JSON.stringify({
+        v: 1, sid: "t1", aid: "a1", ts: "2026-07-30T00:00:00.000Z", agent: "claude-code",
+        projectHash: hash, channel: "hook", mode: "passive", detail: { file: "x.ts", category: "naming" }, ...over,
+      });
+    writeFileSync(
+      join(home, ".vibedrift", "sessions", hash, "t1.jsonl"),
+      [
+        ev({ type: "flag", findingId: "DF-1" }),
+        ev({ type: "flag", findingId: "DF-2" }),
+        ev({ type: "resolve", findingId: "DF-1" }),
+      ].join("\n") + "\n",
+    );
+    entitlement(home, LOCKED);
+    const out = JSON.parse(runStart(home, repo, "startup", "s2").stdout.trim());
+    expect(out.systemMessage).toContain(
+      "On this machine, VibeDrift flagged 2 drifts; your agent fixed 1 on the spot, re-verified. Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing",
+    );
+    // a user notice only, out of the agent's way
+    expect(out).not.toHaveProperty("hookSpecificOutput");
+  });
+
+  it("keeps capturing a session granted before the cache flipped to locked", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    const hash = activateRepo(home, repo);
+    // session 5 starts entitled and gets captured
+    entitlement(home, { entitled: true, reason: "trial", plan: "free", trialUsed: 4, trialLimit: 5 });
+    runStart(home, repo, "startup", "s5");
+    // mid-session the refresh burns the fuse and the cache flips to locked
+    entitlement(home, LOCKED);
+    // ...but the promised session keeps recording to its end
+    spawnSync(TSX, [ENTRY], {
+      input: JSON.stringify({
+        session_id: "s5",
+        cwd: repo,
+        hook_event_name: "PostToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: join(repo, "x.ts"), content: "export const x = 1;\n" },
+      }),
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "" },
+      timeout: 30_000,
+    });
+    const captured = readFileSync(join(home, ".vibedrift", "sessions", hash, "s5.jsonl"), "utf8");
+    expect(captured).toContain('"type":"edit"');
+    // the NEXT session locks normally
+    const r = runStart(home, repo, "startup", "s6");
+    expect(r.stdout).toContain("trial is used up");
+    expect(existsSync(join(home, ".vibedrift", "sessions", hash, "s6.jsonl"))).toBe(false);
+  });
+
+  it("emits the recap only at SessionStart, never on Stop", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    activate(home, repo);
+    entitlement(home, LOCKED);
+    const r = stopHook(home, repo);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe("");
   });
 
   it("captures nothing while locked", () => {

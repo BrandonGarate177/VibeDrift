@@ -24,6 +24,7 @@
  */
 
 import type { SessionEntitlement } from "./entitlement.js";
+import type { TrialRecapTotals } from "./trial-recap.js";
 
 /** The four documented Claude Code SessionStart `source` values. */
 export type StartSource = "startup" | "resume" | "clear" | "compact";
@@ -61,6 +62,26 @@ export interface NudgeContext {
 const BREADCRUMB =
   "VibeDrift won't ask again in this repo — run `vibedrift enable` or `vibedrift decline` to set it explicitly.";
 
+/**
+ * The one-line trial meter, shared by the nudge path (un-activated repos) and
+ * the activated-repo SessionStart notice. Null unless the CACHED entitlement
+ * explicitly says trial: an unknown or unreadable cache emits nothing (a
+ * fabricated count is worse than silence), and Pro never sees a meter.
+ *
+ * Boundary notice: the metrics-surface plan asked for an end-of-session-4
+ * banner, but Claude Code has no reliable session-end signal (B6: Stop fires
+ * per response, and SessionEnd is unobserved on /resume), so the START of the
+ * final session (trialUsed at limit - 1) is the honest boundary.
+ */
+export function buildTrialLine(e: SessionEntitlement | null | undefined): string | null {
+  if (!e || !e.entitled || e.reason !== "trial") return null;
+  // A spent (or corrupt, "6 of 5") count never renders: the lock notice owns
+  // the spent state, and a grandfathered in-flight cache must not show a meter.
+  if (e.trialUsed >= e.trialLimit) return null;
+  const line = `VibeDrift trial: ${e.trialUsed} of ${e.trialLimit} sessions used.`;
+  return e.trialUsed === e.trialLimit - 1 ? `${line} This is your last free session.` : line;
+}
+
 /** The model-facing relay instruction. Imperative (relays reliably in testing)
  *  and carries the soft-decline path (N1: the concierge skill formalizes it in
  *  N2; until then it rides here). */
@@ -90,17 +111,37 @@ export interface NoticeOutput {
  * screen; the native flow has no terminal we own, so the honest equivalent is
  * one `systemMessage` line on SessionStart.
  *
- * Honesty constraints (§6): state only that recording is paused. Never claim
- * anything was prevented, blocked, or deleted — the trial's local ledgers are
- * untouched and still the user's.
+ * Honesty constraints (§6): state that recording is paused, then recap only
+ * what the REAL local ledgers show (`totals`, summed by trial-recap). The copy
+ * is machine-scoped, never trial-scoped: local ledgers can hold more or fewer
+ * sessions than the trial consumed (fail-open captures, other machines).
+ * Three tiers: real numbers when drift was caught; "ran clean" only when every
+ * ledger was read in full; otherwise no claim at all (a partial or absent read
+ * can support neither story). Never claim anything was prevented, blocked, or
+ * deleted: the local ledgers are untouched and still the user's.
  */
-export function buildLockNotice(ctx: { entitlement: SessionEntitlement }): NoticeOutput {
+export function buildLockNotice(ctx: {
+  entitlement: SessionEntitlement;
+  totals?: TrialRecapTotals | null;
+}): NoticeOutput {
   const limit = ctx.entitlement.trialLimit;
+  const t = ctx.totals;
+  let recap: string;
+  if (t && t.flagged > 0) {
+    const drifts = t.flagged === 1 ? "1 drift" : `${t.flagged} drifts`;
+    const fixed =
+      t.resolved === 0
+        ? "none were fixed in-session."
+        : `your agent fixed ${t.resolved} on the spot, re-verified.`;
+    recap = `On this machine, VibeDrift flagged ${drifts}; ${fixed} Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing`;
+  } else if (t && t.complete) {
+    recap = `Your watched sessions on this machine ran clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing`;
+  } else {
+    recap = `Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing`;
+  }
   return {
     systemMessage:
-      `VibeDrift: your ${limit}-session trial is used up, so this session is not being recorded. ` +
-      `Run \`vibedrift upgrade\` to keep Drift Sessions watching. ` +
-      `Your existing local session history stays on this machine.`,
+      `VibeDrift: your ${limit}-session trial is used up, so this session is not being recorded. ` + recap,
   };
 }
 
@@ -112,9 +153,8 @@ export function buildNudgeOutput(ctx: NudgeContext): NudgeOutput {
       additionalContext: buildNudgeInstruction(ctx),
     },
   };
+  const trialLine = buildTrialLine(ctx.entitlement);
   if (ctx.lastAsk) out.systemMessage = BREADCRUMB;
-  else if (ctx.entitlement && ctx.entitlement.reason === "trial") {
-    out.systemMessage = `VibeDrift trial: ${ctx.entitlement.trialUsed} of ${ctx.entitlement.trialLimit} sessions used.`;
-  }
+  else if (trialLine) out.systemMessage = trialLine;
   return out;
 }

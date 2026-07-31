@@ -5,6 +5,7 @@ import {
   buildNudgeInstruction,
   buildNudgeOutput,
   buildLockNotice,
+  buildTrialLine,
 } from "@/session/nudge";
 import type { SessionEntitlement } from "@/session/entitlement";
 
@@ -56,6 +57,47 @@ describe("buildNudgeInstruction", () => {
   });
 });
 
+describe("buildTrialLine", () => {
+  it("renders the trial count for a trial entitlement", () => {
+    expect(buildTrialLine(trial(2))).toBe("VibeDrift trial: 2 of 5 sessions used.");
+  });
+
+  it("returns null for a pro account (the meter is trial-only)", () => {
+    expect(buildTrialLine(pro)).toBeNull();
+  });
+
+  it("returns null when the entitlement is unknown (never a fabricated count)", () => {
+    expect(buildTrialLine(null)).toBeNull();
+    expect(buildTrialLine(undefined)).toBeNull();
+  });
+
+  it("returns null when locked (the lock notice owns that path)", () => {
+    expect(
+      buildTrialLine({ entitled: false, reason: "locked", plan: "free", trialUsed: 5, trialLimit: 5 }),
+    ).toBeNull();
+  });
+
+  it("returns null once the count reaches the limit (the lock notice owns spent)", () => {
+    expect(buildTrialLine(trial(5))).toBeNull();
+  });
+
+  it("returns null on an absurd over-limit count from a corrupt cache", () => {
+    expect(buildTrialLine(trial(6))).toBeNull();
+  });
+
+  it("flags the last free session at 4 of 5", () => {
+    expect(buildTrialLine(trial(4))).toBe(
+      "VibeDrift trial: 4 of 5 sessions used. This is your last free session.",
+    );
+  });
+
+  it("keys the boundary on the real limit, not a hardcoded 4", () => {
+    expect(buildTrialLine({ ...trial(4), trialLimit: 10 })).toBe(
+      "VibeDrift trial: 4 of 10 sessions used.",
+    );
+  });
+});
+
 describe("buildNudgeOutput", () => {
   it("emits the SessionStart context-injection envelope", () => {
     const out = buildNudgeOutput({ repoName: "r" });
@@ -67,6 +109,11 @@ describe("buildNudgeOutput", () => {
   it("shows a trial systemMessage on a trial account", () => {
     const out = buildNudgeOutput({ repoName: "r", entitlement: trial(1) });
     expect(out.systemMessage).toBe("VibeDrift trial: 1 of 5 sessions used.");
+  });
+
+  it("carries the last-free-session notice at the boundary", () => {
+    const out = buildNudgeOutput({ repoName: "r", entitlement: trial(4) });
+    expect(out.systemMessage).toContain("This is your last free session.");
   });
 
   it("the final ask folds in the breadcrumb, overriding the trial line", () => {
@@ -93,13 +140,74 @@ describe("buildLockNotice (the native path's paywall signal)", () => {
 
   it("names the upgrade path", () => {
     const out = buildLockNotice({ entitlement: locked });
-    expect(out.systemMessage).toContain("vibedrift upgrade");
+    expect(out.systemMessage).toContain("Pro");
+    expect(out.systemMessage).toContain("$15/mo");
+    expect(out.systemMessage).toContain("vibedrift.ai/dashboard/billing");
+  });
+
+  it("recaps real totals, machine-scoped, when the watch caught drift", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: { flagged: 14, resolved: 9, complete: true } });
+    expect(out.systemMessage).toContain(
+      "On this machine, VibeDrift flagged 14 drifts; your agent fixed 9 on the spot, re-verified. Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing",
+    );
+    // local ledgers are not the trial ledger: never attribute the sums to it
+    expect(out.systemMessage).not.toContain("Across your");
+  });
+
+  it("pluralizes a single caught drift", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: { flagged: 1, resolved: 1, complete: true } });
+    expect(out.systemMessage).toContain("VibeDrift flagged 1 drift; your agent fixed 1 on the spot");
+    expect(out.systemMessage).not.toContain("1 drifts");
+  });
+
+  it("says none were fixed instead of fixed 0", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: { flagged: 3, resolved: 0, complete: true } });
+    expect(out.systemMessage).toContain(
+      "VibeDrift flagged 3 drifts; none were fixed in-session. Keep it in the loop:",
+    );
+    expect(out.systemMessage).not.toContain("fixed 0");
+  });
+
+  it("recaps totals at a non-default server limit", () => {
+    const out = buildLockNotice({
+      entitlement: { ...locked, trialUsed: 12, trialLimit: 12 },
+      totals: { flagged: 3, resolved: 2, complete: true },
+    });
+    expect(out.systemMessage).toContain("12-session trial is used up");
+    expect(out.systemMessage).toContain(
+      "On this machine, VibeDrift flagged 3 drifts; your agent fixed 2 on the spot, re-verified.",
+    );
+  });
+
+  it("claims a clean run only when every ledger was read in full", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: { flagged: 0, resolved: 0, complete: true } });
+    expect(out.systemMessage).toContain(
+      "Your watched sessions on this machine ran clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing",
+    );
+    expect(out.systemMessage).not.toContain("On this machine, VibeDrift flagged");
+  });
+
+  it("claims nothing when a partial read found no drift", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: { flagged: 0, resolved: 0, complete: false } });
+    expect(out.systemMessage).not.toContain("ran clean");
+    expect(out.systemMessage).not.toContain("flagged");
+    expect(out.systemMessage).toContain("Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing");
+  });
+
+  it("claims nothing when no ledgers were readable (never invented copy)", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: null });
+    expect(out.systemMessage).toBe(
+      "VibeDrift: your 5-session trial is used up, so this session is not being recorded. " +
+        "Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing",
+    );
   });
 
   it("claims nothing about prevention or deletion (honesty constraint)", () => {
-    const msg = buildLockNotice({ entitlement: locked }).systemMessage ?? "";
-    for (const banned of ["prevented", "blocked", "deleted", "erased"]) {
-      expect(msg.toLowerCase()).not.toContain(banned);
+    for (const totals of [null, { flagged: 3, resolved: 2, complete: true }, { flagged: 0, resolved: 0, complete: false }]) {
+      const msg = buildLockNotice({ entitlement: locked, totals }).systemMessage ?? "";
+      for (const banned of ["prevented", "blocked", "deleted", "erased"]) {
+        expect(msg.toLowerCase()).not.toContain(banned);
+      }
     }
   });
 

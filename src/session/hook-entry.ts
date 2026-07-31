@@ -23,6 +23,8 @@
 import { relative, resolve, isAbsolute, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import type { TrialRecapTotals } from "./trial-recap.js";
 
 const SELF_TIMEOUT_MS = 2000;
 
@@ -88,7 +90,7 @@ async function main(): Promise<number> {
   }
 
   const [
-    { appendEvent, newActivityId },
+    { appendEvent, newActivityId, sessionFilePath },
     { normalizeHookPayload },
     { repoIdentity, defaultSessionsDir },
     { runEditChecks },
@@ -116,7 +118,24 @@ async function main(): Promise<number> {
   // reads a local cache written by `watch-session` — no network on this path.
   // Fail-open: a missing/unreadable cache permits capture.
   const { isCapturePermitted, readEntitlementCache } = await import("./entitlement.js");
-  const capturePermitted = isCapturePermitted();
+  let capturePermitted = isCapturePermitted();
+
+  // Sticky session grant (P0.3): the server burns the final trial fuse on this
+  // session's first ingested edit, so a mid-session entitlement refresh can
+  // flip the cache to locked while the session it promised is still running.
+  // Ledger evidence of THIS session id means capture started under an entitled
+  // (or fail-open) read; that session keeps recording to its end. The next
+  // session id has no ledger yet and locks normally. An error here means no
+  // grant, never an unlock.
+  if (!capturePermitted) {
+    try {
+      if (existsSync(sessionFilePath(defaultSessionsDir(), projectHash, normalized.sid))) {
+        capturePermitted = true;
+      }
+    } catch {
+      // stay locked
+    }
+  }
 
   // Activation gate (L-N3): an explicit `decline` stops capture entirely; an
   // un-activated (unanswered) repo emits the SessionStart nudge but otherwise
@@ -149,6 +168,28 @@ async function main(): Promise<number> {
     }
   }
 
+  // Trial meter (P0.3): the activated-repo counterpart of the nudge path's
+  // trial line, same systemMessage channel, same new-interactive-only budget.
+  // Cached entitlement only; an unknown cache emits nothing (never a fabricated
+  // count) and Pro never sees a meter (buildTrialLine owns both rules). Guarded
+  // so a failure here changes nothing about how the rest of the event is
+  // processed (hooks fail open).
+  if (normalized.type === "session_start" && status === "active" && capturePermitted) {
+    try {
+      const source =
+        typeof (payload as Record<string, unknown>).source === "string"
+          ? ((payload as Record<string, unknown>).source as string)
+          : undefined;
+      const { isNewInteractiveSource, isNonInteractive, buildTrialLine } = await import("./nudge.js");
+      if (isNewInteractiveSource(source) && !isNonInteractive()) {
+        const line = buildTrialLine(readEntitlementCache());
+        if (line) process.stdout.write(JSON.stringify({ systemMessage: line }) + "\n");
+      }
+    } catch {
+      // fail-open: no meter, capture proceeds untouched
+    }
+  }
+
   if (!capturePermitted) {
     // Locked account: capture nothing, but do two things so the paywall is
     // neither invisible nor a one-way door.
@@ -164,7 +205,17 @@ async function main(): Promise<number> {
       const { isNewInteractiveSource, isNonInteractive, buildLockNotice } = await import("./nudge.js");
       const ent = readEntitlementCache();
       if (ent && !ent.entitled && isNewInteractiveSource(source) && !isNonInteractive()) {
-        process.stdout.write(JSON.stringify(buildLockNotice({ entitlement: ent })) + "\n");
+        // Recap what the trial really caught (P0.3). Real ledger sums only;
+        // null falls back to number-free copy inside buildLockNotice. Guarded
+        // so a summing failure still delivers the paused notice.
+        let totals: TrialRecapTotals | null = null;
+        try {
+          const { sumLocalLedgerTotals } = await import("./trial-recap.js");
+          totals = sumLocalLedgerTotals(defaultSessionsDir());
+        } catch {
+          // fail-open: recap without numbers
+        }
+        process.stdout.write(JSON.stringify(buildLockNotice({ entitlement: ent, totals })) + "\n");
       }
     }
     if (normalized.type === "session_end") {
