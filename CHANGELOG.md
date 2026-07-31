@@ -4,6 +4,17 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+**You can now see where your free trial stands.**
+
+Drift Sessions gives every free account 5 watched sessions. Until now, the only way to find out how many you had left was to run out.
+
+- Every new session on the trial starts with a quiet one-liner: `VibeDrift trial: 2 of 5 sessions used.` It shows once at session start, never interrupts your work, and paid accounts never see it.
+- Your last free session says so up front. And once a session starts recording, it finishes recording, even if the trial runs out mid-session.
+- When the trial is spent, the notice shows what VibeDrift actually caught on your machine: `flagged 2 drifts; your agent fixed 1 on the spot, re-verified.` If your local session records show nothing, or there are none, it claims nothing. No estimates, no invented numbers.
+- The [dashboard](https://www.vibedrift.ai/dashboard/sessions) shipped the matching upgrades this week: the same trial meter, fixed-and-re-verified counts on every session, all three agent calls (accepted, parked, declined), and your agent's pre-write checks on the session timeline.
+
 ## 0.19.0 — 2026-07-29
 
 **Your agent now cleans up after itself.**
