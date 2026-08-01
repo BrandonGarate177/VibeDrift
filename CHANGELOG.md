@@ -4,6 +4,16 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+**Sessions now record whether each edit was actually checked.**
+
+Every edit event in a session carries a simple fact: did the inline drift check run on this edit, or was it skipped? That powers the dashboard's new drift density reading (flags per 100 checked edits) with an honest denominator; skipped edits never count.
+
+- **Docs and config no longer flag.** Non-code files are now a proper skip: a code snippet quoted inside a markdown file was previously checked as if it were source, which could flag example code in your docs. It no longer does.
+- **A huge pattern cache can't slow your session start.** The baseline read is size-capped on the hook path; an oversized cache simply counts as "no baseline" instead of being parsed while your agent waits.
+- No change to advisories, decisions, or exit behavior. Hooks still fail open, and older session records without the new field are unaffected.
+
 ## 0.19.1 — 2026-07-30
 
 **You can now see where your free trial stands.**
