@@ -4,6 +4,17 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+**The most important catch now leads.**
+
+When one edit trips several checks, only one advisory reaches your agent. That pick used to follow a fixed category order, so a near-exact duplicate of code you already have could sit behind a debatable style note and never get mentioned.
+
+- **Duplicates at 90% similarity or higher go first.** Everything is still recorded either way; this only changes which one the agent hears about while it works.
+- **Pattern advisories say what they actually measured.** A learned convention now reads "Dominant pattern in this repo's sampled files" instead of "Repo uses", because the vote comes from the files the check indexed, not every file you have. Conventions you declared yourself in CLAUDE.md keep the direct wording and cite the line that declares them.
+- **Your agent can always record its call on a live session.** Recording a decision used to time out after 10 minutes while the dashboard still showed the session live for 15. Both now use the same 15-minute window.
+- **Headless runs no longer lose the agent's reasoning.** When the decision tool is unavailable, as in a CI or `-p` run, the agent is told to state its decision and reason in its reply instead of silently dropping it.
+
 ## 0.19.2 — 2026-08-01
 
 **Sessions now record whether each edit was actually checked.**
