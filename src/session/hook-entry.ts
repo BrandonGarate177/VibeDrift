@@ -231,7 +231,19 @@ async function main(): Promise<number> {
   // Resolve the edited file to a repo-relative path. A relative file_path from
   // the hook is resolved against the repo root; an edit OUTSIDE the repo is not
   // in this repo's baseline, so we record only its basename (never a machine
-  // path) and skip the inline check.
+  // path), under an out-of-repo marker, and skip the inline check.
+  //
+  // The answer is STAMPED on the event (`detail.inRepo`) rather than inferred
+  // downstream: consumers that promise "nothing outside this repo" — the opt-in
+  // file-name manifest — read the mark, never the path's shape.
+  //
+  // The recorded path always uses FORWARD slashes, the same normalization the
+  // scanner applies to its own relative paths (core/discovery.ts). `relative()`
+  // answers "src\payments\refund.ts" on Windows, and a backslash is refused by
+  // the wire rules, so without this the file-name manifest stays permanently
+  // empty on win32 while `--names on` reports success. This is the ledger's own
+  // field and the upload schema hashes exactly this string, so the name and the
+  // pseudonym cannot drift apart.
   let checkAbsFile: string | null = null;
   if (event.detail.file) {
     const abs = isAbsolute(event.detail.file)
@@ -239,10 +251,20 @@ async function main(): Promise<number> {
       : resolve(rootDir, event.detail.file);
     const rel = relative(rootDir, abs);
     if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
-      event.detail.file = rel;
+      event.detail.file = rel.replace(/\\/g, "/");
+      event.detail.inRepo = true;
       checkAbsFile = abs;
     } else {
-      event.detail.file = basename(abs);
+      // Outside the repo: still only the basename (never a machine path), but
+      // marked with a leading "../" so the recorded form CANNOT equal an
+      // in-repo path. An in-repo relative path never starts with ".." — that is
+      // exactly what sends an edit down this branch — so a repo-ROOT file and
+      // an out-of-repo file sharing a basename stay two distinct strings, and
+      // therefore two distinct pseudonyms, everywhere the hash is the identity.
+      // The marker also makes the path unshareable by construction: a ".."
+      // segment is refused by the wire rules on both sides.
+      event.detail.file = `../${basename(abs)}`;
+      event.detail.inRepo = false;
     }
   }
 

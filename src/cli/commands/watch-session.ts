@@ -14,7 +14,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
-import { repoIdentity, defaultSessionsDir } from "../../session/repo.js";
+import { repoIdentity, repoKey, defaultSessionsDir } from "../../session/repo.js";
 import {
   installHooks,
   uninstallHooks,
@@ -22,7 +22,16 @@ import {
   resolveHookCommand,
   detectClaudeCode,
 } from "../../session/install.js";
-import { recordAnswer } from "../../session/activation.js";
+import {
+  recordAnswer,
+  setShareFileNames,
+  setNamesDeletePending,
+  loadActivation,
+  recordNameShare,
+  nameShareHashes,
+  forgetNameShare,
+} from "../../session/activation.js";
+import { clearUploadedNames } from "../../session/file-names.js";
 import { appendConsentReceipt } from "../../session/consent.js";
 import { vibedriftHome } from "../../core/vibedrift-home.js";
 import { runLiveTape } from "../../session/live.js";
@@ -58,6 +67,13 @@ export interface WatchSessionOptions {
   /** Toggle hosted sync (Phase 5): "on" opts into derived-only upload, "off"
    *  disables it. A standalone control — sets config and returns. */
   sync?: "on" | "off";
+  /** Toggle the opt-in file-name manifest for THIS repo: "on" shares
+   *  repo-relative paths (never contents) so the dashboard can name files,
+   *  "off" deletes what was uploaded and stops future uploads. */
+  names?: "on" | "off";
+  /** Test seam: perform the server-side name deletion for ONE project hash
+   *  (default: the API). Called once per hash this repo has uploaded under. */
+  deleteNames?: (projectHash: string) => Promise<{ deleted?: number }>;
   /** Force hosted sync off for THIS run regardless of the saved setting. */
   localOnly?: boolean;
   /** Test seam: inject config instead of reading ~/.vibedrift (bypasses network). */
@@ -89,6 +105,7 @@ export type WatchSessionStatus =
   | "locked"
   | "login_required"
   | "sync_updated"
+  | "names_updated"
   | "aborted_unparseable";
 
 async function askConsent(question: string): Promise<boolean> {
@@ -160,6 +177,19 @@ export async function runWatchSession(
       console.log(`${chalk.green("✓")} Drift Sessions hosted sync is OFF — sessions stay entirely on this machine.`);
     }
     return "sync_updated";
+  }
+
+  // File-name sharing toggle: per repo, default off, fully reversible. Also a
+  // standalone control, so it never installs hooks or starts a watch.
+  if (options.names) {
+    await toggleFileNames(options.names === "on", {
+      projectHash,
+      rootDir,
+      sessionsDir,
+      activationHome: options.activationHome ?? vibedriftHome(),
+      deleteNames: options.deleteNames,
+    });
+    return "names_updated";
   }
 
   // Entitlement gate (decision 8): sessions are Pro-only with a one-time
@@ -267,6 +297,125 @@ export async function runWatchSession(
     console.log(chalk.dim("  next Claude Code session in this repo will be recorded; run with --status to check."));
   }
   return installed;
+}
+
+/**
+ * `--names on|off`: the per-repo file-name opt-in.
+ *
+ * ON prints the full disclosure BEFORE the flag is written, so the state on
+ * disk never runs ahead of what the user was told, and records the project hash
+ * it opted in under against an identity that survives the repo moving.
+ *
+ * OFF deletes what was already uploaded and then clears the flag. The delete is
+ * scoped to a project hash, and one repo can have uploaded under more than one
+ * (it moved on disk, or a second clone or git worktree of it hashes differently
+ * while sharing the same repo identity), so every hash this machine recorded for
+ * THIS repo is deleted, not just the current one. The local opt-in is cleared
+ * for every one of those hashes for the same reason: an opt-out that deleted a
+ * second working copy's uploads while leaving that copy ARMED would have it
+ * re-upload them on its next flush, after the user was told sharing was off.
+ * The flag ends up off locally either way — but the report is strictly what
+ * happened: a deletion that did not land is never printed as one, the current
+ * hash's failure is queued for the next flush, and an older hash's failure says
+ * plainly that it is still out there.
+ */
+async function toggleFileNames(
+  on: boolean,
+  ctx: {
+    projectHash: string;
+    rootDir: string;
+    sessionsDir: string;
+    activationHome: string;
+    deleteNames?: (projectHash: string) => Promise<{ deleted?: number }>;
+  },
+): Promise<void> {
+  const { projectHash, rootDir, sessionsDir, activationHome } = ctx;
+  const key = repoKey(rootDir);
+
+  if (on) {
+    console.log(chalk.bold("Drift Sessions file names for this repo"));
+    console.log(
+      chalk.dim(
+        [
+          '  What gets shared: repo-relative file paths, for example src/payments/refund.ts,',
+          '  so your dashboard can name files instead of showing "file ab12cd34".',
+          "  What never gets shared: file contents, absolute paths, or anything outside this repo.",
+          "  Scope: this repo only, and only while hosted sync is on (vibedrift watch-session --sync on).",
+          "  Reversible: vibedrift watch-session --names off deletes the names already uploaded",
+          "  for this repo and stops future uploads.",
+        ].join("\n"),
+      ),
+    );
+    setShareFileNames(projectHash, true, activationHome);
+    recordNameShare(projectHash, key, activationHome);
+    console.log(`${chalk.green("✓")} File names are ON for this repo.`);
+    return;
+  }
+
+  // Every hash this repo has shared names under: the current one plus anything
+  // recorded from another path for the same repo (it moved, or a second clone
+  // or worktree of it opted in and hashes differently).
+  const hashes = [...new Set([projectHash, ...nameShareHashes(loadActivation(activationHome), key)])];
+  let removed = 0;
+  let counted = true;
+  let currentFailed = false;
+  let earlierFailed = 0;
+  for (const hash of hashes) {
+    try {
+      const res = ctx.deleteNames ? await ctx.deleteNames(hash) : await deleteNamesViaNetwork(hash);
+      if (typeof res?.deleted === "number") removed += res.deleted;
+      else counted = false;
+      forgetNameShare(hash, key, activationHome);
+      setNamesDeletePending(hash, false, activationHome);
+      await clearUploadedNames(sessionsDir, hash);
+    } catch {
+      // keep the record: it is what a re-run (or, for this repo's current hash,
+      // the next flush) retries from.
+      if (hash === projectHash) currentFailed = true;
+      else earlierFailed++;
+    }
+  }
+  // Disarm every hash the opt-out covered, not only the current one: another
+  // working copy of this repo would otherwise still be opted in and re-upload
+  // on its next flush the names this command just deleted.
+  for (const hash of hashes) setShareFileNames(hash, false, activationHome);
+  if (currentFailed) setNamesDeletePending(projectHash, true, activationHome);
+
+  if (!currentFailed && earlierFailed === 0) {
+    console.log(
+      `${chalk.green("✓")} File names are OFF for this repo${counted ? ` (${removed} removed from your dashboard)` : ""}.`,
+    );
+    console.log(chalk.dim('  The dashboard shows per-repo pseudonyms again, like "file ab12cd34".'));
+    return;
+  }
+
+  console.log(`${chalk.green("✓")} File names are OFF for this repo; nothing more will be uploaded.`);
+  if (counted && removed > 0) {
+    console.log(chalk.dim(`  Removed ${removed} uploaded name${removed === 1 ? "" : "s"} from your dashboard.`));
+  }
+  if (currentFailed) {
+    console.log(
+      chalk.dim("  The delete request did not reach the server. It will be retried on the next session flush."),
+    );
+  }
+  if (earlierFailed > 0) {
+    console.log(
+      chalk.dim(
+        `  ${earlierFailed} earlier upload${earlierFailed === 1 ? "" : "s"} for this repo (from a previous path) could not be removed. Re-run this command to try again.`,
+      ),
+    );
+  }
+}
+
+/** Delete one project hash's uploaded names server-side. Throws when there is
+ *  no account or the request fails; the caller decides what that means (the
+ *  current hash is queued for the next flush, an older one is kept for a
+ *  re-run) and reports only what actually happened. */
+async function deleteNamesViaNetwork(projectHash: string): Promise<{ deleted?: number }> {
+  const cfg = await readConfig();
+  if (!cfg.token) throw new Error("not logged in");
+  const { deleteSessionNames } = await import("../../auth/api.js");
+  return deleteSessionNames(cfg.token, projectHash, { apiUrl: cfg.apiUrl });
 }
 
 /** Resolve entitlement from the server, tolerating offline via the local cache.

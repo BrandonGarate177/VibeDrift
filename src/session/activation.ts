@@ -18,6 +18,10 @@
  * Only an explicit `vibedrift enable`/`decline` sets `state`; the ask itself
  * self-limits via `askCount`.
  *
+ * Name shares: which project hashes each repo turned the file-name manifest on
+ * under, keyed on an identity that survives the repo moving on disk, so opting
+ * out can delete every upload it made rather than only the current hash's.
+ *
  * Dir grants (O19): stored canonicalized; `$HOME` and filesystem roots are
  * REFUSED outright — a grant that broad is indistinguishable from the
  * auto-capture-everything design that was explicitly rejected.
@@ -56,15 +60,39 @@ export interface ProjectActivation {
   askCount?: number;
   /** The one-time "run `vibedrift enable`" breadcrumb was already shown. */
   breadcrumbShown?: boolean;
+  /** Opt-in (default OFF): upload this repo's REPO-RELATIVE file paths with the
+   *  derived events, so the dashboard can name files instead of showing a
+   *  pseudonym. Paths only, never file contents. Set by
+   *  `watch-session --names on`, cleared by `--names off`. */
+  shareFileNames?: boolean;
+  /** A `--names off` DELETE that never reached the server. The next flush
+   *  retries it; sharing is already off either way. */
+  namesDeletePending?: boolean;
+}
+
+/**
+ * One repo turned file-name sharing ON under one project hash.
+ *
+ * The project hash is derived from the repo's PATH, so a repo that moves gets a
+ * new one and its earlier uploads become unreachable from the new location.
+ * This record keys them on `repoKey` (see session/repo.ts), which survives a
+ * move, so `--names off` can delete every hash this machine uploaded names
+ * under for the repo rather than only the current one.
+ */
+export interface NameShareRecord {
+  repoKey: string;
+  projectHash: string;
+  at: string;
 }
 
 export interface ActivationStore {
   v: 1;
   projects: Record<string, ProjectActivation>;
   dirGrants: Array<{ path: string; at: string }>;
+  nameShares: NameShareRecord[];
 }
 
-const EMPTY: ActivationStore = { v: 1, projects: {}, dirGrants: [] };
+const EMPTY: ActivationStore = { v: 1, projects: {}, dirGrants: [], nameShares: [] };
 
 export function activationPath(home: string = vibedriftHome()): string {
   return join(home, "activation.json");
@@ -79,6 +107,7 @@ export function loadActivation(home: string = vibedriftHome()): ActivationStore 
       v: 1,
       projects: typeof parsed.projects === "object" && parsed.projects !== null ? parsed.projects : {},
       dirGrants: Array.isArray(parsed.dirGrants) ? parsed.dirGrants : [],
+      nameShares: Array.isArray(parsed.nameShares) ? parsed.nameShares : [],
     };
   } catch {
     return structuredClone(EMPTY);
@@ -124,6 +153,75 @@ export function recordAnswer(
   const store = loadActivation(home);
   const prev = store.projects[projectHash] ?? {};
   store.projects[projectHash] = { ...prev, state, at: new Date().toISOString(), surface };
+  saveActivation(store, home);
+}
+
+/** Is the opt-in file-name manifest on for this repo? Strictly `true` counts,
+ *  so a missing store, a missing entry, or any other value reads as OFF. */
+export function shareFileNamesEnabled(store: ActivationStore, projectHash: string): boolean {
+  return store.projects[projectHash]?.shareFileNames === true;
+}
+
+/** Does this repo still owe the server a `--names off` deletion? */
+export function namesDeleteIsPending(store: ActivationStore, projectHash: string): boolean {
+  return store.projects[projectHash]?.namesDeletePending === true;
+}
+
+/** Flip the per-repo file-name opt-in. Off deletes the key rather than storing
+ *  `false`, so the store never grows a record for a repo that opted out. */
+export function setShareFileNames(projectHash: string, on: boolean, home: string = vibedriftHome()): void {
+  patchProject(projectHash, (rec) => {
+    if (on) rec.shareFileNames = true;
+    else delete rec.shareFileNames;
+  }, home);
+}
+
+/** Remember that this repo shared names under this project hash, so a later
+ *  `--names off` can still reach the upload after the repo (and therefore the
+ *  hash) has moved. Idempotent per (repoKey, projectHash). */
+export function recordNameShare(projectHash: string, repoKey: string, home: string = vibedriftHome()): void {
+  const store = loadActivation(home);
+  if (store.nameShares.some((s) => s.repoKey === repoKey && s.projectHash === projectHash)) return;
+  store.nameShares.push({ repoKey, projectHash, at: new Date().toISOString() });
+  saveActivation(store, home);
+}
+
+/** Every project hash this machine shared names under for one repo, newest last.
+ *  The caller adds the CURRENT hash: a repo that opted in before this record
+ *  existed has no entry here. */
+export function nameShareHashes(store: ActivationStore, repoKey: string): string[] {
+  return store.nameShares.filter((s) => s.repoKey === repoKey).map((s) => s.projectHash);
+}
+
+/** Drop one record, once its server-side names are confirmed deleted. A record
+ *  whose deletion FAILED is kept on purpose: it is the retry list. */
+export function forgetNameShare(projectHash: string, repoKey: string, home: string = vibedriftHome()): void {
+  const store = loadActivation(home);
+  const kept = store.nameShares.filter((s) => !(s.repoKey === repoKey && s.projectHash === projectHash));
+  if (kept.length === store.nameShares.length) return;
+  store.nameShares = kept;
+  saveActivation(store, home);
+}
+
+/** Record (or clear) the owed opt-out deletion the next flush retries. */
+export function setNamesDeletePending(projectHash: string, pending: boolean, home: string = vibedriftHome()): void {
+  patchProject(projectHash, (rec) => {
+    if (pending) rec.namesDeletePending = true;
+    else delete rec.namesDeletePending;
+  }, home);
+}
+
+/** Read-modify-write one project record, preserving every other field (an
+ *  activation answer must survive a names toggle, and vice versa). */
+function patchProject(
+  projectHash: string,
+  mutate: (rec: ProjectActivation) => void,
+  home: string = vibedriftHome(),
+): void {
+  const store = loadActivation(home);
+  const rec = { ...(store.projects[projectHash] ?? {}) };
+  mutate(rec);
+  store.projects[projectHash] = rec;
   saveActivation(store, home);
 }
 

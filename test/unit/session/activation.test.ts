@@ -13,6 +13,13 @@ import {
   resolveGrantPath,
   addDirGrant,
   DirGrantRefusedError,
+  shareFileNamesEnabled,
+  setShareFileNames,
+  namesDeleteIsPending,
+  setNamesDeletePending,
+  recordNameShare,
+  nameShareHashes,
+  forgetNameShare,
 } from "@/session/activation";
 
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "vd-act-")));
@@ -21,7 +28,7 @@ describe("activation store", () => {
   it("missing file loads as empty (unanswered)", () => {
     const home = tmp();
     const store = loadActivation(home);
-    expect(store).toEqual({ v: 1, projects: {}, dirGrants: [] });
+    expect(store).toEqual({ v: 1, projects: {}, dirGrants: [], nameShares: [] });
     expect(projectStatus(store, "h1")).toBe("unanswered");
   });
 
@@ -161,5 +168,55 @@ describe("dir-grant refusals (O19)", () => {
     const link = join(base, "link");
     symlinkSync(real, link);
     expect(resolveGrantPath(link)).toBe(real);
+  });
+});
+
+describe("per-repo file-name sharing (opt-in manifest)", () => {
+  it("is OFF by default, for a missing store and for an activated repo", () => {
+    const home = tmp();
+    expect(shareFileNamesEnabled(loadActivation(home), "h1")).toBe(false);
+    recordAnswer("h1", "active", "cli-enable", home);
+    expect(shareFileNamesEnabled(loadActivation(home), "h1")).toBe(false);
+  });
+
+  it("setShareFileNames round-trips per repo and never leaks to another repo", () => {
+    const home = tmp();
+    setShareFileNames("h1", true, home);
+    expect(shareFileNamesEnabled(loadActivation(home), "h1")).toBe(true);
+    expect(shareFileNamesEnabled(loadActivation(home), "h2")).toBe(false);
+    setShareFileNames("h1", false, home);
+    expect(shareFileNamesEnabled(loadActivation(home), "h1")).toBe(false);
+  });
+
+  it("keeps the activation answer intact when the flag flips", () => {
+    const home = tmp();
+    recordAnswer("h1", "active", "cli-enable", home);
+    setShareFileNames("h1", true, home);
+    const store = loadActivation(home);
+    expect(projectStatus(store, "h1")).toBe("active");
+    expect(shareFileNamesEnabled(store, "h1")).toBe(true);
+    expect(store.projects.h1.surface).toBe("cli-enable");
+  });
+
+  it("records every project hash one repo shared names under, and forgets one at a time", () => {
+    const home = tmp();
+    expect(nameShareHashes(loadActivation(home), "git:abc")).toEqual([]);
+    recordNameShare("h1", "git:abc", home);
+    recordNameShare("h1", "git:abc", home); // idempotent
+    recordNameShare("h2", "git:abc", home); // the same repo, moved on disk
+    recordNameShare("h3", "git:other", home); // a different repo entirely
+    expect(nameShareHashes(loadActivation(home), "git:abc")).toEqual(["h1", "h2"]);
+    forgetNameShare("h1", "git:abc", home);
+    expect(nameShareHashes(loadActivation(home), "git:abc")).toEqual(["h2"]);
+    expect(nameShareHashes(loadActivation(home), "git:other")).toEqual(["h3"]);
+  });
+
+  it("a pending opt-out delete round-trips and clears", () => {
+    const home = tmp();
+    expect(namesDeleteIsPending(loadActivation(home), "h1")).toBe(false);
+    setNamesDeletePending("h1", true, home);
+    expect(namesDeleteIsPending(loadActivation(home), "h1")).toBe(true);
+    setNamesDeletePending("h1", false, home);
+    expect(namesDeleteIsPending(loadActivation(home), "h1")).toBe(false);
   });
 });
