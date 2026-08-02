@@ -4,6 +4,24 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+**Your dashboard can show real file names, for the repos you choose.**
+
+Sessions show `file 77aa11bb` where a file was flagged, because only a salted pseudonym ever leaves your machine. You can now opt a repo in so the dashboard names it properly:
+
+```
+vibedrift watch-session --names on     # this repo only
+vibedrift watch-session --names off    # deletes what was uploaded, stops future uploads
+```
+
+- **Paths only.** Never file contents, never absolute paths, never anything outside the repo. Whether a file is inside the repo is decided when the edit is recorded, not guessed from the path afterwards, and anything unmarked is left out rather than assumed safe.
+- **Off by default**, per repo, and the disclosure prints before the setting is saved.
+- **Reversible for real.** Turning it off deletes the names already uploaded, including for a repo that has moved on disk, and it applies to every clone of that repo rather than only the one you ran it in. If the delete cannot reach the server, nothing claims success and it retries later.
+- **Never gets in the way of a session.** Names upload only after your session record is safely stored, and a failure there cannot block or corrupt it.
+
+**Also fixed: file paths on Windows.** Paths recorded during a session used backslashes, which broke matching against your repo's patterns. They are recorded portably now.
+
 ## 0.19.3 — 2026-08-02
 
 **The most important catch now leads.**
