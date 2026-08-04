@@ -45,7 +45,7 @@ Every directory under `src/`, one line each. All verified against the tree.
 | `src/output/` | Pure presentation over a `ScanResult`: terminal, HTML, CSV, DOCX, context files, fix plans, history diff, floor badge, tease |
 | `src/scoring/` | The engine (noisy-OR damage, geometric-mean composite), the category and kind registry (`categories.ts`), cross-layer dedup |
 | `src/telemetry/` | The anonymous scan beacon and the report-open beacon (`beacon.ts`) |
-| `src/tools-core/` | Channel-neutral implementations of the six tools (the five in-loop query/validate tools plus `init` setup), plus the nudge and finalize helpers; imports no MCP SDK |
+| `src/tools-core/` | Channel-neutral implementations of seven of the eight tools (the five in-loop query/validate tools plus `init` setup and the `enable` activation answer; `respond_to_flag` lives in the MCP layer), plus the nudge and finalize helpers; imports no MCP SDK |
 | `src/types/` | Ambient TypeScript declarations (`tree-sitter-wasms.d.ts`) |
 | `src/utils/` | Tree-sitter grammar loading (`ast.ts`), `.gitignore`/`.vibedriftignore` handling, small text and math helpers |
 | `src/render.ts` | The public `./render` re-export surface: `renderHtmlReport`, `computeScores`, `estimateScoreAfterFixes` |

@@ -2,7 +2,7 @@
 
 A batch scan reports drift after the code exists. By the time `vibedrift scan` flags a `.then()` chain in a repo that settled on async/await, the agent that wrote it has moved on, the diff is merged, and fixing the drift is a separate chore someone has to schedule. The MCP server moves the same checks to the moment that matters: while the agent is deciding what to write. An agent that asks "what is this repo's dominant error-handling pattern" before writing a handler, or "does this function already exist" before implementing it, does not introduce the drift in the first place. That is the product thesis, stated in the server's own instructions (`src/mcp/server.ts`): the local in-loop tools are free for everyone and answer conformance questions during coding; batch `--deep --diff` runs remain the recommendation for reviewing a finished change-set.
 
-MCP (Model Context Protocol) is the standard by which coding agents like Claude Code call external tools. VibeDrift's server speaks it over stdio: `vibedrift mcp` (or `node dist/mcp/server.js`) starts a server named `vibedrift` that registers seven tools. All logging goes to stderr, because stdout is the JSON-RPC channel; a stray `console.log` would corrupt the protocol stream.
+MCP (Model Context Protocol) is the standard by which coding agents like Claude Code call external tools. VibeDrift's server speaks it over stdio: `vibedrift mcp` (or `node dist/mcp/server.js`) starts a server named `vibedrift` that registers eight tools. All logging goes to stderr, because stdout is the JSON-RPC channel; a stray `console.log` would corrupt the protocol stream.
 
 ## Two layers: tools-core and the MCP adapter
 
@@ -33,11 +33,12 @@ A `no_baseline` response carries `NO_BASELINE_MESSAGE`, which tells the agent ho
 
 Write-time tool results may additionally carry a `NudgeHint`: a gated, cooled-down FYI offering a deep scan (fires only when the user is signed in, after 8 or more write-time calls in a session, at most once per day, and only when the user has never deep-scanned or their last deep scan is older than 3 days; the timestamp lives in the global `~/.vibedrift/config.json`, so it is per-user, not per-repo, and a deep scan of any repo resets it; `src/tools-core/nudge.ts`).
 
-## The seven tools
+## The eight tools
 
 | Tool | Question it answers | Key inputs and outputs |
 |---|---|---|
 | `init` | Set this repo up (config, ignore rules) | In: `rootDir`, optional `exclude` globs, `applyDetectedExcludes`, `detectOnly`. Out: config written to `<repo>/.vibedrift/config.json`, optional `.vibedriftignore`. Detection and application are separate: candidates are auto-detected but only written when explicitly requested; the tool never silently excludes files |
+| `enable` | Activate (or decline) Drift Sessions for this repo | In: `rootDir`, `confirm` (the user's literal affirmative, required to enable), or `decline: true`. Out: `{action, hooksInstalled}` where `action` is `enabled`, `declined`, or `needs_confirmation`. Records the answer in the activation store plus a local consent receipt, and installs the Claude Code hooks when a supported agent is present; an enable without `confirm` is refused (`src/tools-core/tools/enable.ts`) |
 | `get_intent_hints` | What conventions has the team declared? | In: `rootDir`. Out: hints parsed from CLAUDE.md, AGENTS.md, .cursorrules as `{dimension, pattern, label, source, line, text, binding: true}`. All hints are marked binding; declarations are the team's ground truth and override inferred patterns, so the parser's confidence tiers are deliberately dropped from this surface |
 | `get_dominant_pattern` | What does this repo actually do for dimension X? | In: `rootDir`, `dimension` (one of `error_handling`, `imports`, `exports`, `async`, `naming`, `data_access`, `logging`, `auth`). Out: `{dominantPattern, consistency, examples}` projected from the baseline vote; `auth` reads the granular `securitySubVotes["Auth middleware"]` instead of the collapsed security vote |
 | `check_file_drift` | Does this existing file fit the repo? | In: `rootDir`, `filePath`. Out: `{fits, deviations[], more}` capped at 3 deviations, each with `{dimension, yourPattern, dominantPattern, consistency, fixHint}` citing an exemplar file |
@@ -49,7 +50,7 @@ Dimension names in `get_dominant_pattern` map onto real drift categories (`error
 
 ## respond_to_flag and the decision ledger
 
-The seventh tool belongs to Drift Sessions. While a `vibedrift watch-session` run rides inside a coding session, its hooks feed a one-line advisory back to the agent whenever an edit diverges from the repo's dominant patterns, and each advisory carries a `DF-<n>` id. `respond_to_flag` lets the agent state its call on one of those flags: `accept` (it agrees and will fix it), `park` (defer it to a human reviewer), or `decline` (it judges the flag wrong or unnecessary for this codebase), each with a one-line reason. The call appends a `decision` event to the local session ledger and sends zero bytes (`src/mcp/tools/respond-to-flag.ts`, `src/session/decision.ts`).
+`respond_to_flag` belongs to Drift Sessions. While a `vibedrift watch-session` run rides inside a coding session, its hooks feed a one-line advisory back to the agent whenever an edit diverges from the repo's dominant patterns, and each advisory carries a `DF-<n>` id. `respond_to_flag` lets the agent state its call on one of those flags: `accept` (it agrees and will fix it), `park` (defer it to a human reviewer), or `decline` (it judges the flag wrong or unnecessary for this codebase), each with a one-line reason. The call appends a `decision` event to the local session ledger and sends zero bytes (`src/mcp/tools/respond-to-flag.ts`, `src/session/decision.ts`).
 
 A decision is orthogonal to a finding's outcome. Accepting a flag records a stated intent, not a verified resolution: a flag is marked resolved only when a later re-edit re-runs the same finding over the file and it passes, never because the agent answered `accept`. The two are recorded separately and never conflated. Capture is fail-open, matching the rest of the session ledger: the adapter always returns status `ok` with a `recorded` boolean, so a decision it could not persist surfaces as a soft "not recorded" the agent can act on rather than a thrown error that would derail its turn.
 
