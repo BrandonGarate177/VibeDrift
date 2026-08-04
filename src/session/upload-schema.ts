@@ -26,7 +26,7 @@ import { createHash } from "node:crypto";
 import { extractAnchors } from "./anchors.js";
 import { maskSecrets } from "./mask.js";
 import { MAX_REASON_LEN } from "./decision.js";
-import type { SessionEvent, SessionEventType } from "./types.js";
+import type { HostAgent, SessionEvent, SessionEventType } from "./types.js";
 
 export const UPLOAD_SCHEMA_VERSION = 1 as const;
 const MAX_LABEL = 120;
@@ -52,7 +52,7 @@ export interface UploadEvent {
   sessionId: string;
   activityId: string;
   ts: string;
-  agent: "claude-code";
+  agent: HostAgent;
   projectHash: string;
   type: UploadEventType;
   /** sha256(relPath)[:16] — group by file without revealing the path. */

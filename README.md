@@ -56,7 +56,7 @@ VibeDrift reaches your code three ways. One local engine, three different moment
 | Channel | Who starts it | What you get | Tier |
 | --- | --- | --- | --- |
 | **[CLI](#the-cli-you-run-it)**<br>`vibedrift` | **You**, after the code exists | Scans, HTML reports, a CI gate, continuous watch, a git pre-push gate | Free (`watch`, the pre-push gate and deep scan are Pro) |
-| **[MCP server](#the-mcp-server-your-agent-asks)**<br>`vibedrift mcp` | **Your agent**, before it writes | Seven tools it can call: the repo's dominant pattern, near duplicates, whether a file drifts | Free (an opt-in `deep` flag on two tools is metered) |
+| **[MCP server](#the-mcp-server-your-agent-asks)**<br>`vibedrift mcp` | **Your agent**, before it writes | Eight tools it can call: the repo's dominant pattern, near duplicates, whether a file drifts | Free (an opt-in `deep` flag on two tools is metered) |
 | **[Drift Sessions](#drift-sessions-preview)**<br>`vibedrift watch-session` | **VibeDrift**, while the edit happens (Claude Code only today) | A one line advisory in the agent's context whether it asked or not, on a live tape | Pro, one time 5 session trial |
 
 The last two are different plumbing. MCP is **pull**: a long lived process your agent connects to over stdio, so it only helps when the agent chooses to ask. Drift Sessions is **push**: it rides Claude Code's own hooks, so VibeDrift gets a word in whether the agent asks or not. Run both and they join up: while a Drift Session is active, the MCP server's verdicts tee into that same session ledger, so the agent's questions and VibeDrift's flags read as one dialogue. Without an active session the MCP tools simply answer and write nothing.
@@ -101,7 +101,7 @@ Any other MCP client uses the same stdio command:
 }
 ```
 
-Seven tools ship with the server:
+Eight tools ship with the server:
 
 | Tool | What the agent gets |
 | --- | --- |
@@ -111,6 +111,7 @@ Seven tools ship with the server:
 | `find_similar_function` | An existing near duplicate, so the agent reuses instead of rewriting |
 | `validate_change` | Whether a proposed function would introduce drift or duplicate something |
 | `init` | One time repo setup, so every tool skips non product code |
+| `enable` | The [Drift Sessions](#drift-sessions-preview) activation answer: records your consent (or your decline) and installs the Claude Code hooks when present |
 | `respond_to_flag` | The agent's call on a live [Drift Sessions](#drift-sessions-preview) flag: accept, park, or decline |
 
 <div align="center">
@@ -121,7 +122,7 @@ These run on your machine and need no login. The baseline builds itself on the f
 
 Two of them, `validate_change` and `find_similar_function`, also take an opt-in `deep` flag that checks your function against the [cloud checker](#deep-scan). It needs an account, it is metered, and it is the only part of this channel that leaves your machine: the first deep call in a repo sends your functions to be embedded, and later calls send the function being written plus the handful of existing functions it might duplicate. It stays off unless the agent asks for it.
 
-No MCP client? The five query tools above, everything except `init` and `respond_to_flag` which are MCP only, are also plain functions: `import { validateChange, findSimilarFunction } from "@vibedrift/cli/tools"` ([docs/tools-api.md](./docs/tools-api.md)), or a self contained [Agent Skill](./skills/vibedrift/SKILL.md).
+No MCP client? The five query tools above, everything except `init`, `enable`, and `respond_to_flag` which are MCP only, are also plain functions: `import { validateChange, findSimilarFunction } from "@vibedrift/cli/tools"` ([docs/tools-api.md](./docs/tools-api.md)), or a self contained [Agent Skill](./skills/vibedrift/SKILL.md).
 
 ## Drift Sessions (preview)
 

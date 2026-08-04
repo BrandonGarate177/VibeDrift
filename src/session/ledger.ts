@@ -8,7 +8,8 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import type { SessionEvent } from "./types.js";
+import { maskSecrets } from "./mask.js";
+import type { SessionEvent, SessionEventDetail } from "./types.js";
 
 /** Hard cap per line so a pathological prompt cannot bloat the ledger. */
 const MAX_LINE_BYTES = 32 * 1024;
@@ -33,6 +34,24 @@ function byteLen(s: string): number {
   return Buffer.byteLength(s, "utf8");
 }
 
+/** Writer-side defense in depth: the transient edit body is stripped by the
+ *  hook before append (a single destructure in hook-entry.ts), but the writer
+ *  refuses to persist a `body` key regardless — at the top level and inside
+ *  detail — so a future producer bug can never land file contents on disk.
+ *  Events without the key pass through byte-identical. */
+function stripBody(ev: SessionEvent): SessionEvent {
+  let out = ev;
+  if ("body" in (out as unknown as Record<string, unknown>)) {
+    const { body: _top, ...rest } = out as SessionEvent & { body?: unknown };
+    out = rest as SessionEvent;
+  }
+  if (out.detail && typeof out.detail === "object" && "body" in (out.detail as Record<string, unknown>)) {
+    const { body: _nested, ...detail } = out.detail as SessionEventDetail & { body?: unknown };
+    out = { ...out, detail: detail as SessionEventDetail };
+  }
+  return out;
+}
+
 export async function appendEvent(
   baseDir: string,
   projectHash: string,
@@ -41,20 +60,54 @@ export async function appendEvent(
 ): Promise<void> {
   const dir = join(baseDir, safeSegment(projectHash));
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  let line = JSON.stringify(ev);
+  const clean = stripBody(ev);
+  let line = JSON.stringify(clean);
   // Cap by UTF-8 BYTES, not code units: a CJK/emoji prompt is 1 code unit but
   // 3-4 bytes each, so a length check would pass lines ~3x over the cap.
-  if (byteLen(line) > MAX_LINE_BYTES && ev.detail.promptText) {
-    let kept = ev.detail.promptText;
-    // Shrink until the whole serialized line fits, halving the prompt each pass
-    // then trimming; cheap and convergent for any multibyte content.
-    while (kept.length > 0 && byteLen(line) > MAX_LINE_BYTES) {
-      const target = Math.max(0, Math.floor(kept.length * 0.75) - 16);
-      kept = kept.slice(0, target);
-      line = JSON.stringify({ ...ev, detail: { ...ev.detail, promptText: kept, truncated: true } });
+  //
+  // Oversize handling covers EVERY string field in detail plus msgToAgent, not
+  // just promptText: an oversized decision reason or advisory must not blow
+  // past the cap either. Order is mask-then-truncate — truncating first could
+  // bisect a secret so the masking regex no longer sees its shape and a
+  // fragment leaks. maskSecrets is idempotent, so re-masking text the producer
+  // already masked is a no-op; well-formed small events skip this path
+  // entirely and persist byte-identical.
+  if (byteLen(line) > MAX_LINE_BYTES) {
+    const detail: Record<string, unknown> = { ...(clean.detail as unknown as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(detail)) {
+      if (typeof v === "string") detail[k] = maskSecrets(v);
     }
-    if (byteLen(line) > MAX_LINE_BYTES) {
-      line = JSON.stringify({ ...ev, detail: { ...ev.detail, promptText: "", truncated: true } });
+    let msgToAgent = typeof clean.msgToAgent === "string" ? maskSecrets(clean.msgToAgent) : undefined;
+    const rebuild = (): string =>
+      JSON.stringify({
+        ...clean,
+        ...(msgToAgent !== undefined ? { msgToAgent } : {}),
+        detail: { ...detail, truncated: true },
+      });
+    line = rebuild();
+    // Shrink the longest text field each pass until the whole serialized line
+    // fits; cheap and convergent for any multibyte content (each pass cuts
+    // that field by at least a quarter, bottoming out at the empty string).
+    while (byteLen(line) > MAX_LINE_BYTES) {
+      let key: string | null = null;
+      let len = 0;
+      for (const [k, v] of Object.entries(detail)) {
+        if (typeof v === "string" && v.length > len) {
+          key = k;
+          len = v.length;
+        }
+      }
+      let isMsg = false;
+      if (msgToAgent !== undefined && msgToAgent.length > len) {
+        key = "msgToAgent";
+        len = msgToAgent.length;
+        isMsg = true;
+      }
+      if (key === null || len === 0) break;
+      const target = Math.max(0, Math.floor(len * 0.75) - 16);
+      if (isMsg) msgToAgent = (msgToAgent as string).slice(0, target);
+      else detail[key] = (detail[key] as string).slice(0, target);
+      line = rebuild();
     }
   }
   await appendFile(sessionFilePath(baseDir, projectHash, sessionId), `${line}\n`, { mode: 0o600 });
