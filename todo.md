@@ -1,7 +1,131 @@
 # CLI backlog
 
-- **Session re-check: three residual resolve defects, all reproduced by an adversarial pass.** The
-  anchoring work closed the four original false-resolve classes, but these survive and are known:
+- **[DESIGN-READY, GATED] Multi-host native sessions — Phase 0 contract freeze + adapter program.**
+  Full narrative in workspace LOGBOOK 2026-08-03. Six hosts verified to have Claude-style hook
+  surfaces (Cursor 21 events / Codex 11 stable-default-on / Gemini 11 GA / Copilot 14 / Windsurf-Devin
+  / Cline record-only; Zed+Aider none). Panel verdict: wrong next build while adoption is 1 uploader;
+  ship Phase 0 now INSIDE Claude Code (HostId union at types.ts:70 server-first, ULID aid, lane field,
+  delivery-tier stamps, writer-side masking choke point in appendEvent closing the promptText-only
+  byte-cap hole and the single-destructure body strip, ledger concurrency measurement, derived
+  get_pending_flags, liveness + trial-fuse cause attribution in doctor) and gate all adapters behind a
+  WRITTEN adoption trigger (suggested ~10 weekly uploaders or a named mixed-host team deal). Second
+  host default: Codex CLI. Cursor needs a runtime probe first (afterFileEdit batch-edit reports) plus
+  committed-config consent machinery (.cursor/hooks.json commits to VCS — one teammate must never
+  enable capture on another's machine; consent gate is the first line of every adapter). Killed ideas
+  (do not re-propose): seq write-time ordering field (no ledger lock exists), pre-opt-in funnel
+  beacons (consent violation), standalone advisory queue store (ledger is the store), git-status
+  sweep edits (human edits on the agent tape), committed hooks.json as default distribution,
+  first-session flag KPI. 11 founder decisions pending, 1-4 block Phase 0: gate values, delivery tier
+  on the wire, lane ordinals on the wire, trial-fuse enforcement point (currently UNDEFINED and is
+  itself a scheduled silent-capture-stop).
+
+- **[PARKED] opencode.ai host adapter (verified in source 2026-08-03, not started).** opencode is an
+  MIT agent (org `anomalyco`, Bun-compiled binary + Electron desktop host) with a JS plugin API, not
+  shell hooks. A 34-agent adversarial pass over the real source confirmed the port is viable and the
+  advisory channel is actually stronger than Claude Code's: throwing inside `tool.execute.before`
+  aborts the tool body, leaves the session alive, and delivers the raw `Error.message` to the model
+  verbatim as a tool-error, so the guardrail fires at the moment of the decision rather than at the
+  start of the turn. Context injection also works on the non-experimental `chat.message` hook
+  (push onto `output.parts`). Shape if built: a thin `@vibedrift/opencode-plugin` that only
+  translates into the existing `vibedrift` CLI, so the ledger/masking/canonicalization stay in one
+  place. Must-nots discovered, each a silent failure: (1) never key capture on a tool NAME, because
+  on GPT models opencode ships `apply_patch` and removes `edit`/`write`, so an `edit`-keyed hook
+  records zero file mutations while looking healthy; (2) never use the `$` shell helper, it is
+  `Bun.$` and is `undefined` on the Node/Electron host despite being typed non-optional, so use
+  `child_process` and pass `directory` explicitly; (3) `output.parts` must be mutated in place, and
+  a pushed part needs a full valid shape or the prompt dies with zero LLM calls; (4) a throw stops
+  every later plugin's hook on that trigger, and one of the seven call sites (`prompt.ts:308`,
+  subtask path) is outside the containment that makes throwing safe. Blocking prerequisite: a
+  capability self-check, because opencode's own `permission.ask` hook has been exported, typed and
+  dead for ~19 months with no apiVersion and no error on unknown hook keys, which is exactly the
+  failure that would leave the dashboard reporting healthy numbers from a channel that stopped
+  arriving. Open lead: opencode's V2 plugin API (`packages/plugin/src/v2/`) may expose a queryable
+  registration surface, which would upgrade the self-check from a behavioural canary to a handshake.
+  Do NOT start before the current-state audit of native sessions across Claude Code / Codex / Cursor
+  is settled.
+
+- **ORM false positives: the remaining class (#87 partially fixed in #92).** The `ent.` boundary,
+  the substring path gate, and the route-registration collision all shipped. What survives, measured
+  across 11 repos: 10 of 13 remaining ORM-naming findings come from the two *other* ORM regexes in
+  `src/codedna/pattern-classifier.ts`. `/\.Where\(/i` fires on numpy's `np.where(` (seen at
+  `vibe-drift-api api/models/anomaly.py:61`) and `/\.create\(.*{/` fires on
+  `stripe.customers.create({` (seen at `vibedrift-landing-page src/app/api/billing/portal/route.ts:68`).
+  The other 3 are trpc files that genuinely use Prisma, so those labels are correct: do not count
+  them as defects. Same shape of fix as the Ent one, a receiver or argument-shape discriminator
+  rather than a bare verb, and it needs the same before/after on real repos. Also still open from
+  #87: `routes.findOne(pattern)` in `architectural-contradiction.ts` passes an identifier rather
+  than a route-path literal, so it is indistinguishable from `Model.findOne(id)` without receiver
+  knowledge; pinned deliberately in the golden corpus with a comment.
+
+- **[P0] `findSimilarToBody` has no query normalization and no token floor (#81 + #82 part 1).** One
+  function, three surfaces (`find_similar_function` at 0.6, `validate_change` at 0.8, and the live
+  session hook). (a) The index is body-only (`baseline.ts` over `fn.rawBody`) while the query
+  tokenizes whatever the caller pasted, so a verbatim clone submitted with its declaration line
+  deflates LCS: across all 1003 functions in `src` an exact self-clone scores under 0.8 56.8% of the
+  time (median 0.784), and `validate_change` returns `ok:true, duplicateOf:[], confidence:high`. An
+  affirmative false bless on the one question that tool exists to answer. (b) No floor on either
+  side, so a 15-slot / 7-distinct-token predicate matches any other one-liner: `isPaidPlan` and
+  `isNewInteractiveSource` score 1.00, and the session hook PUSHES "prefer importing it" into an
+  agent's context unprompted. Fix all three surfaces index-side in one change: token floor ~25-30 on
+  index entries (flooring only the query is insufficient, `lcsSimilarity`'s own minLen/maxLen >= 0.5
+  guard lets a 30-token query reach 0.667 against a 15-token entry), a distinct-token gate, and score
+  both raw and signature-stripped query keeping the max (monotone, cannot add a false positive). Do
+  NOT re-index signature-inclusive tokens: changes the session redundancy path and invalidates every
+  cached baseline. Also fix `test/unit/mcp/tools/find-similar-function.test.ts`, whose fixture builds
+  index entries from signature-included strings and is structurally incapable of catching (a).
+
+- **Unguarded reads of readdir-derived paths, five sites (#83).** `trial-recap.ts`,
+  `watch-session.ts` (no stat and no size cap at all, foreground, no timeout), `upload-follower.ts`,
+  `session/follow.ts`, and `core/history.ts` `loadLatestScan` all hand a readdir result straight to a
+  read with no file-type check. A FIFO reports size 0, passes any byte-size gate, and blocks a sync
+  syscall no in-process timer can preempt. NOT a locked-account problem despite how it was filed:
+  `loadLatestScan` is on the ordinary previous-scan delta path. Fix: one shared guarded read helper
+  (stat, reject non-regular, reject oversized, null on failure) plus an async sibling, preserving
+  trial-recap's `complete:false` honesty semantics. Keep `statSync` rather than `readdirSync`
+  `withFileTypes`, because a Dirent for a symlink to a real ledger reports `isSymbolicLink` not
+  `isFile` and that rewrite would silently drop symlinked ledgers. Low urgency (needs a deliberately
+  planted non-regular file in a 0o700 dir), cheap whenever someone is next in that area.
+
+- **`duplicates` vs `semantic-duplication` have drifted into one detector with two extractors (#88).**
+  `src/analyzers/duplicates.ts` carries a private regex requiring `)` immediately before `{`, so it
+  cannot match a return-type annotation OR generics, while `semantic-duplication.ts` uses the shared
+  extractor with byte-identical thresholds (0.7 flag, 15 min tokens, cross-file, 0.6 length ratio).
+  Do NOT just swap the extractor in: measured on this repo that takes 31 pairs to 281, but the 281 is
+  248 test/fixture pairs and 33 non-test, and all 33 non-test are ALREADY detected by
+  semantic-duplication. Net: +220 scaffolding pairs, zero new real detections, composite unmoved
+  (duplicates is hygiene kind). The real defect is that all 20 emitted locations on this repo are
+  throwaway test helpers (`getUser`, `f`, `feature`) while the interesting ones (`escapeRegex` across
+  2 files, `nameSegments` across 3) surface only under semantic-duplication. So this is a scoping
+  decision: narrow `duplicates` to the test/fixture ground it uniquely covers, or retire it into the
+  drift detector. Bump `duplicatesAnalyzer.version` either way so the S1 cache does not mask it.
+
+- **`upload-state.ts` docstrings promise a guarantee the code does not provide (#85).** The module
+  header says racing uploaders "can only ever move offsets forward" and `commit`'s docstring says "a
+  racing slower uploader can never rewind a faster one". Both are false: the read-merge-write is not
+  atomic as a whole and a racing writer drops the other's entry (reproduced across two independently
+  spawned processes; 60/60 under `UV_THREADPOOL_SIZE=1`). The RACE is deliberate and fine, and
+  `test/unit/session/upload-state.test.ts` says so outright ("we do NOT assert both survive the
+  race") because offsets only move backward to a legitimately-held value, replays carry `activityId`,
+  the server dedupes, and "duplicate" is committable so the watermark re-advances. Do NOT add a lock:
+  a stranded lockfile from a SIGKILLed detached flush child wedges the hook, which is worse than the
+  benign race. Fix the two docstrings only. Open design question: is watch-session running
+  concurrently with the native Stop hooks a supported configuration?
+
+- **Session re-check: two residual resolve defects, both reproduced by an adversarial pass.** Both
+  now have runnable external repros (#84, #86) worth landing as regression tests. Two corrections
+  from that pass: for (a) the class wrap is NOT the causal predicate (rename plus one changed token,
+  no class anywhere, also falsely resolves; the real predicate is "anchor symbol no longer findable
+  by name AND at least one token changed", and what the wrap uniquely adds is that the wrapped form
+  also stops being re-flagged, so only that variant is terminal). For (b), implementing the stated
+  fix will turn `test/integration/session-hook.test.ts` RED, because that test never writes the fixed
+  file to disk and so earns its resolve assertion through the very fallback the fix removes; rewrite
+  it in the same change. Measured fix for (a): raw token shingle containment at ~0.6 cleanly
+  separates must-stay-open from must-resolve (the latter at 0 containment), is O(tokens) not O(n*m),
+  and is one-sided safe. Two dead ends, do not re-derive: reusing the flag path's decomposition in
+  `signalPresent` does not help (the extractor cannot see the class method, so the query collapses
+  back to the whole file), and normalized-token containment does not help either (`normalizeTokens`
+  assigns identifier slots by first occurrence, so a subsequence inside a larger file renumbers).
+  The anchoring work closed the four original false-resolve classes, but these survive and are known:
   (a) **redundancy, wrap plus one token.** The anchor holds the flagged construct's exact token
   sequence, so a clone moved verbatim into a class stays open, but changing a single identifier
   while wrapping breaks containment and falls through to a whole-file duplicate query, which is
@@ -67,9 +191,6 @@
   repos where the gate fires, self-heals on the next scan. If it warrants suppression,
   fold into the next SCORING_VERSION bump so diffScans refuses the pair.
 
-- **`test/calibration/README.md` drift.** Sample output shows a "≥5pt" monotonic drop (the gate in
-  `run.ts` is 3.0) and a "drop a generator in `generators/`" section references a directory that
-  does not exist (injectors live in `injectors.ts`).
 - **Rust auth recall gaps (all fail-safe — a miss, never a false-bless).** From
   the real-repo spot check: (1) a `MethodRouter::route_layer(...)` nested inside
   `arg1` of `.route(path, mr)` is invisible to the ancestor-layer coverage walk,
@@ -162,23 +283,16 @@
   short "N routes could not be confirmed (hooks: ...)" line so the AI-agent
   context file carries the same hedge the report surfaces do.
 
-- **Gin `.Any()` / Chi `.Method()` routes are not extracted at all.** Task B1
-  (2026-07-08, canonical mutating-method classification) fixed the
-  vote-exclusion bug for Express `.all()` and Flask `methods=[...]`, but Go's
-  `extractGoRoutes` (`src/drift/security-consistency.ts`) never recognizes
-  `r.Any(...)` (Gin) or `r.Method(...)` (Chi) as route registrations in the
-  first place, so these routes are missing from the route list entirely, not
-  just excluded from the mutating-method vote. Separate coverage gap, not a
-  vote-exclusion bug.
-
 - **Security floor precision gate only covers `private-key`.** The calibration
   floor-precision gate (`test/calibration/precision-recall.ts`) exercises only the
-  `private-key` floor rule because the fixture corpus has no `.go` files, so
-  `go-tls-skip-verify`'s false-positive rate is unmeasured (not just under-weighted).
-  Add a Go fixture to the calibration corpus so the "floor precision >= 0.95" claim
-  covers all five floor rules, not one. (The composite `calibrate:monotonic`
-  non-responsiveness at low injection rates is pre-existing and tracked with the
-  scoring-formula responsiveness work, not here.)
+  `private-key` floor rule, because `injectSecurityFloor` (`injectors.ts`) plants a
+  private key into `src/handlers/*Handler.ts` and nothing else. The corpus does now
+  carry Go/Python/Rust security fixtures, but those drive the AUTH vote, not the floor
+  rules, so `go-tls-skip-verify`'s false-positive rate is still unmeasured (not just
+  under-weighted). Extend the floor injector to plant a Go TLS skip-verify so the
+  "floor precision >= 0.95" claim covers all five floor rules, not one. (The composite
+  `calibrate:monotonic` non-responsiveness at low injection rates is pre-existing and
+  tracked with the scoring-formula responsiveness work, not here.)
 
 - **Security suppression: regex-fallback over-suppression on unterminated strings.**
   In `src/drift/security-suppression.ts`, the AST comment-node path is immune, but
@@ -191,28 +305,6 @@
   (2) strip an unterminated quote to end-of-line before scanning for a comment marker,
   so the fallback fails to the safe under-match side. Never-over-suppress is the
   dominating invariant.
-
-- **Security Consistency is not at parity across supported languages.** The
-  route/auth consistency detector (`extractRoutes`, `security-consistency.ts`)
-  covers 3 of the 5 supported languages, at uneven precision, and the AST
-  precision upgrade from the Phase 1 wedge is JS/TS-only:
-  - **Rust: zero coverage.** There is no Rust route extractor at all — the
-    `extractRoutes` dispatch silently skips Rust, so Axum/Actix/Rocket services
-    produce no security-consistency signal. (The Phase 1 plan text claiming a
-    "regex fallback for Go/Python/Rust" was wrong; no Rust extractor ever
-    existed. Corrected in the plan.)
-  - **Python/Go: still line-window regex, un-upgraded and unverified.**
-    `extractPythonRoutes` / `extractGoRoutes` read auth/validation/rate-limit
-    from a ±10–30 line proximity window, not from parsed middleware args, so
-    they both false-positive (auth keyword nearby but not applied) and
-    false-negate (auth applied via a pattern not in the regex). They did NOT get
-    the receiver whitelist, `router.use()` inheritance, or the over-capture fix
-    (`cache.get`) the JS/TS AST path got, and were not smoke-tested on the latest
-    build (only JS was exercised in the Phase 1 verification).
-  Full remediation is drafted as a dedicated phase:
-  `PLAN-security-conformance-phase-multilang.md` (port the AST extractor to
-  Python + Go, add a first Rust extractor, per-language calibration). Warrants
-  its own branch, not a fold into the current work.
 
 - **Mounted-router middleware resolution needs proper module resolution.** The
   Security Consistency detector should resolve `app.use('/api', apiRouter)`
@@ -262,6 +354,3 @@
   "resolved" drift finding in the diff banner and get committed into
   `.vibedrift/context.md`. The same fix (feed the diff digest source from
   `scoredDriftView(...).driftFindings`) would exclude it too.
-- **`watch` renderer shows signed-out copy while authenticated** (v0.14.8): watch
-  output includes the "Sign in with `vibedrift login`…" hint and free-tier deep
-  tease even on a logged-in session. Fix the auth-state branch in the renderer.

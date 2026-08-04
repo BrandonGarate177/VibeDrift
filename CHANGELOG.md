@@ -4,6 +4,24 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+**Stops reporting an ORM that isn't there.**
+
+Three regex defects made the data-access classifier label files `orm` in codebases that have none. Scanning this repository against itself reported `src/auth/api.ts uses http_client while 5/6 files use orm` at confidence 1.0, with no ORM in `package.json`. The label was inverted: the one file that genuinely is an HTTP client was reported as the deviation from a majority that does not exist. Reported in #87, fixed in #92.
+
+- **The Ent signal is anchored.** The ORM regex carried a bare `ent\.` alternative with no left word boundary, so any identifier ending in "ent" followed by a dot read as Ent ORM usage. `file.content.split(...)` was enough. Measured across five repos that declare no ORM, that one alternative produced 125 of 125 "ORM import/usage" signals. Ent is now matched as a package selector followed by an exported identifier, which keeps every real Ent shape and drops the false ones.
+- **Handler paths match by segment, not substring.** `route` inside `autorouter.ts` and `route-extractors/`, and `api` inside `therapist.ts`, were admitting files that are not handlers, and a file that enters the classifier gets labelled by whatever signal fires first. Directories genuinely named `routers/` are still included, since that is where real data access lives.
+- **Route registrations are no longer read as ORM calls.** `router.Create("/users", h)` and `r.Delete("/orders/{id}", h.Del)` were evidence of an ORM because the detector matched bare CRUD verb names with no receiver. It now discriminates on the first argument: a route path is a string literal beginning with `/`, and no ORM idiom measured passes one there. This label also reaches the MCP `validate_change` tool, so an agent editing a router could previously be told its change conflicts with an ORM the repo does not have.
+
+Measured across 11 repositories and roughly 4,000 files: findings naming `orm` drop from 61 to 13, and architectural-consistency findings are unchanged at 29, so nothing unrelated was lost. Repos that genuinely use an ORM keep their detection: trpc retains all 20 of its real Prisma signals.
+
+**Scores may move slightly.** Removing false findings changes the composite by up to 0.3 points on affected repos. This repository's own score moved from 87.0 to 86.8.
+
+**Baselines rebuild once.** `BASELINE_VERSION` moves to 4 because the data-access vote is persisted in the MCP baseline, so the first scan after upgrading re-derives it.
+
+Known and not fixed here: two other ORM regexes still produce false positives on `np.where(` and `stripe.customers.create({`. That is a separate class with a different fix.
+
 ## 0.19.4 — 2026-08-02
 
 **Your dashboard can show real file names, for the repos you choose.**
