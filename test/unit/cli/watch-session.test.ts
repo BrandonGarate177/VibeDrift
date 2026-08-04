@@ -218,6 +218,56 @@ describe("runWatchSession", () => {
     expect(status).toBe("login_required");
     expect(process.exitCode).toBe(1);
   });
+
+  it("tells a signed-out no-agent machine the agent is unsupported, never the login gate", async () => {
+    const repo = tmp("vd-ws-none-");
+    mkdirSync(join(repo, ".git"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    let entitlementCalls = 0;
+    const status = await runWatchSession(repo, {
+      watch: true,
+      sessionsDir: tmp("vd-ws-sess-"),
+      entitlementDir: tmp("vd-ws-ent-"),
+      homeDir: tmp("vd-ws-home-"),
+      resolveEntitlement: async () => {
+        entitlementCalls++;
+        return null;
+      },
+    });
+    expect(status).toBe("no_agent");
+    expect(process.exitCode).toBe(1);
+    // the entitlement/login gate is never consulted on a machine that cannot
+    // run sessions at all
+    expect(entitlementCalls).toBe(0);
+    const printed = err.mock.calls.flat().map(String).join("\n");
+    expect(printed).toContain("No supported agent detected");
+    expect(printed).not.toContain("vibedrift login");
+  });
+
+  it("--status on a no-agent machine still reports status", async () => {
+    const repo = tmp("vd-ws-none-");
+    mkdirSync(join(repo, ".git"));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const status = await runWatchSession(repo, {
+      status: true,
+      sessionsDir: tmp("vd-ws-sess-"),
+      homeDir: tmp("vd-ws-home-"),
+    });
+    expect(status).toBe("status");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("--uninstall on a no-agent machine still reports not_installed", async () => {
+    const repo = tmp("vd-ws-none-");
+    mkdirSync(join(repo, ".git"));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const status = await runWatchSession(repo, {
+      uninstall: true,
+      sessionsDir: tmp("vd-ws-sess-"),
+      homeDir: tmp("vd-ws-home-"),
+    });
+    expect(status).toBe("not_installed");
+  });
 });
 
 describe("runWatchSession — file-name sharing toggle (--names)", () => {

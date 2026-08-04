@@ -192,6 +192,16 @@ export async function runWatchSession(
     return "names_updated";
   }
 
+  // Agent detection comes FIRST: a machine that cannot run sessions at all
+  // must hear that, not a login prompt it cannot use. Hooks already installed
+  // implies a repo-local .claude/, so this can never turn an installed machine
+  // away.
+  if (!detectClaudeCode(rootDir, home)) {
+    console.error("No supported agent detected (looked for .claude/ in the repo or ~/.claude/settings.json). Claude Code is the first supported agent.");
+    process.exitCode = 1;
+    return "no_agent";
+  }
+
   // Entitlement gate (decision 8): sessions are Pro-only with a one-time
   // 5-session trial. Only gate the WATCH path (delivering the live tape); a
   // bare install (--no-watch) just wires hooks, and the hook self-gates via the
@@ -235,12 +245,6 @@ export async function runWatchSession(
       await followLiveTape(projectHash, sessionsDir, rootDir, entDir, consumeCb, uploadPlan);
     }
     return "already";
-  }
-
-  if (!detectClaudeCode(rootDir, home)) {
-    console.error("No supported agent detected (looked for .claude/ in the repo or ~/.claude/settings.json). Claude Code is the first supported agent.");
-    process.exitCode = 1;
-    return "no_agent";
   }
 
   if (!options.yes) {
