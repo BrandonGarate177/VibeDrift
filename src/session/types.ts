@@ -6,6 +6,20 @@
  * events, never by rewriting earlier lines.
  */
 
+/** The agent hosts the schema admits. Multi-host prep: every producer today
+ *  stamps "claude-code" (the only host with a session capture path); the other
+ *  members exist so a future host integration is a producer change, not a
+ *  schema migration. */
+export type HostAgent =
+  | "claude-code"
+  | "cursor"
+  | "codex"
+  | "gemini"
+  | "copilot"
+  | "windsurf"
+  | "cline"
+  | "opencode";
+
 export type SessionEventType =
   | "session_start"
   | "user_prompt"
@@ -67,7 +81,7 @@ export interface SessionEvent {
   aid: string;
   /** ISO-8601 timestamp. */
   ts: string;
-  agent: "claude-code";
+  agent: HostAgent;
   projectHash: string;
   /** Which side of the conversation produced the event. */
   channel: "hook" | "mcp";
