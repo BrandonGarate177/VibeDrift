@@ -33,7 +33,9 @@ const THIN_MARGIN = 75; // consistencyScore near the 70% dominance bar → low c
 export const inputSchema = {
   rootDir: z.string().describe("Absolute path to the repository root"),
   targetPath: z.string().describe("Path of the file being changed (absolute, or relative to rootDir)"),
-  body: z.string().describe("The proposed/changed function body (source)"),
+  body: z.string().describe(
+    "The proposed/changed function's code. Either just the body (inside the braces) or the whole function including its signature — both are matched against the repo's index.",
+  ),
   deep: z
     .boolean()
     .optional()

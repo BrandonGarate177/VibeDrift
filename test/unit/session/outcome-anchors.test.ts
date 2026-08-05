@@ -260,6 +260,29 @@ describe("a redundancy finding whose clone was wrapped, not removed", () => {
     expect(recheckFile(baseline, "src/util.ts", CLONE_IN_OBJECT, dup).resolved).toEqual([]);
   });
 
+  // Issue #86 (shares its root cause with #81): wrapping alone stays open
+  // (above) because token containment survives a byte-identical move. But
+  // wrap it AND change one identifier, and containment breaks, falling
+  // through to signalPresent's redundancy check -- which re-queries the
+  // WHOLE FILE against the body-only index via the same findSimilarToBody
+  // issue #81 fixed. Before that fix, the class+method signature tokens
+  // deflated the score below the 0.8 duplicate threshold and the finding
+  // falsely resolved even though the clone (just renamed one var) is still
+  // there.
+  it("does not clear when the flagged clone is wrapped in a class AND one identifier changes", async () => {
+    const { open } = await raise("s-dup-class-token", "src/util.ts", HELPER_BODY);
+    const dup = only(open, "redundancy");
+    const wrappedPlusToken = `export class Backoff {
+  exponentialBackoff(attempt: number): number {
+    const base = 250;
+    const cap = 30_000;
+    const noise = Math.random() * 100;
+    return Math.min(cap, base * 2 ** attempt) + noise;
+  }
+}`;
+    expect(recheckFile(baseline, "src/util.ts", wrappedPlusToken, dup).resolved).toEqual([]);
+  });
+
   it("clears when the duplicated function is genuinely deleted", async () => {
     const { open } = await raise("s-dup-deleted", "src/util.ts", HELPER_BODY);
     const dup = only(open, "redundancy");
