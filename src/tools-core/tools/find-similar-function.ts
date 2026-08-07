@@ -18,7 +18,9 @@ const DEEP_QUERY_FILE = "query"; // no file yet (function not written) — synth
 
 export const inputSchema = {
   rootDir: z.string().describe("Absolute path to the repository root"),
-  body: z.string().describe("The function body (source) you are about to write"),
+  body: z.string().describe(
+    "The code of the function you are about to write. Either just the body (inside the braces) or the whole function including its signature — both are matched against the repo's index.",
+  ),
   deep: z
     .boolean()
     .optional()

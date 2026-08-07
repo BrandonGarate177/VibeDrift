@@ -84,6 +84,20 @@ describe("find_similar_function (integration)", () => {
     expect(out.matches.find((m) => m.name === "add")).toBeUndefined();
   });
 
+  // Issue #81: a SHORT function's self-clone pasted with its signature used
+  // to score an outright 0 (lcsSimilarity's length-ratio gate firing before
+  // any LCS ran, since the signature alone more than doubled the token
+  // count against the 8-token body-only index entry) -- not just a
+  // deflated score, a complete miss.
+  it("catches a short function's clone even pasted with its signature", async () => {
+    const out = await run({
+      rootDir: repo,
+      body: "export function sum(x, y){ return x + y; }",
+    });
+    expect(out.found).toBe(true);
+    expect(out.matches.some((m) => m.name === "add")).toBe(true);
+  });
+
   it("returns no_baseline for an unscanned dir", async () => {
     const empty = mkdtempSync(join(tmpdir(), "vd-empty-sim-"));
     try {

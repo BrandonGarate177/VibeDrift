@@ -258,6 +258,21 @@ describe("validate_change (integration)", () => {
     }
   });
 
+  // Issue #81: the real baseline index is body-only (extractAllFunctions'
+  // rawBody excludes the declaration line), but a caller pasting a whole
+  // function (signature included -- the natural thing to do) got a query
+  // token stream the index never had. Uses the REAL buildBaseline pipeline,
+  // not a hand-built mock index, so this exercises the actual asymmetry.
+  it("catches a verbatim clone pasted WITH its signature (previously silently missed)", async () => {
+    const out = await run({
+      rootDir: repo,
+      targetPath: join(repo, "feature.ts"),
+      body: "export function then0(){\n  return a()\n    .then(r => r)\n    .then(s => s);\n}",
+    });
+    expect(out.duplicateOf.some((m) => m.name === "then0")).toBe(true);
+    expect(out.ok).toBe(false);
+  });
+
   it("deep:true merges cloud findings, flips ok=false, status=partial", async () => {
     (deepAnalyze as ReturnType<typeof vi.fn>).mockResolvedValue({
       degraded: false,
